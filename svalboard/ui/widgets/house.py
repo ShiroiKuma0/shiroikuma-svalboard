@@ -321,9 +321,20 @@ class Swatch(QFrame):
 class PillButton(QPushButton):
     """The family's dialog action button: a rounded outline, sentence case."""
 
-    def __init__(self, text: str, theme: Theme, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        text: str,
+        theme: Theme,
+        *,
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(text, parent)
         self._theme = theme
+        # A compact pill is for buttons sitting in a row of controls rather than in
+        # a dialog's action row. Without this the horizontal padding alone exceeds
+        # the width such a button is given, and the label is squeezed out entirely.
+        self._compact = compact
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         theme.changed.connect(self.restyle)
         self.restyle()
@@ -332,6 +343,8 @@ class PillButton(QPushButton):
         theme = self._theme
         pad_v = int(theme["button.padding_v"])
         pad_h = int(theme["button.padding_h"])
+        if self._compact:
+            pad_v, pad_h = max(2, pad_v // 2), 8
         height = QFontMetrics(self.font()).height() + pad_v * 2
         # A radius of half the height is what actually makes a pill; the family's
         # Android code writes an absurdly large radius to the same effect.

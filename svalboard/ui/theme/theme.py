@@ -254,6 +254,38 @@ class Theme(QObject):
         }}
         QToolButton:hover {{ background: rgba(255, 255, 0, 0.12); }}
 
+        QListWidget, QListView, QTreeView, QTableView {{
+            background: {self.css('window.background')};
+            color: {self.css('window.text')};
+            border: {self['key.border_width']}px solid {self.css('key.border')};
+            outline: none;
+        }}
+        QListWidget::item, QListView::item {{ padding: 2px 4px; }}
+        QListWidget::item:selected, QListView::item:selected {{
+            background: rgba(255, 255, 0, 0.22);
+            color: {self.css('window.text')};
+        }}
+        QListWidget::item:hover, QListView::item:hover {{
+            background: rgba(255, 255, 0, 0.10);
+        }}
+
+        QTabWidget::pane {{ border: none; }}
+        QTabBar::tab {{
+            background: {self.css('window.background')};
+            color: {self.css('window.dim')};
+            border: {self['key.border_width']}px solid {self.css('window.dim')};
+            border-bottom: none;
+            border-top-left-radius: 6px;
+            border-top-right-radius: 6px;
+            padding: 5px 14px;
+            margin-right: 3px;
+        }}
+        QTabBar::tab:selected {{
+            color: {self.css('window.text')};
+            border-color: {self.css('window.text')};
+        }}
+        QTabBar::tab:hover {{ color: {self.css('window.text')}; }}
+
         QMenu {{
             background: {self.css('dialog.background')};
             border: {self['dialog.border_width']}px solid {self.css('dialog.border')};
