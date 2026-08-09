@@ -28,13 +28,23 @@ from PyQt6.QtWidgets import (
 from .hid.transport import DeviceNotPermitted, TransportError
 from .model.changes import KeymapChanges
 from .model.entries import EntryChanges, MacroChanges, SettingsChanges
-from .model.files import FileFormatError, build_backup, check_fits, load, save_kbi
+from .model.exports import from_vil, to_keymap_header, to_vil
+from .model.printable import to_html
+from .model.files import (
+    FileFormatError,
+    VilNeedsShape,
+    build_backup,
+    check_fits,
+    load,
+    save_kbi,
+)
 from .protocol.dynamic import Combo, KeyOverride, TapDance
 from .protocol.keyboard import Keyboard, ProtocolError
 from .ui.pages.entries import ComboPage, KeyOverridePage, TapDancePage
 from .ui.pages.macros import MacroPage
 from .ui.pages.qmk import QmkSettingsPage
 from .ui.pages.svalboard import SvalboardPage
+from .ui.pages.tester import TesterPage
 from .ui.theme import Theme
 from .ui.widgets.keyboard_canvas import KeyboardCanvas
 from .ui.widgets.keycode_picker import KeycodePicker
@@ -102,6 +112,8 @@ class MainWindow(QMainWindow):
         self.qmk_page = QmkSettingsPage(theme)
         self.sval_page = SvalboardPage(theme)
         self.sval_page.statusRequested.connect(self._read_status)
+        self.tester_page = TesterPage(theme)
+        self.tester_page.keyPressed.connect(self._on_physical_press)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(board, "Keymap")
@@ -111,6 +123,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.override_page, "Key overrides")
         self.tabs.addTab(self.qmk_page, "QMK settings")
         self.tabs.addTab(self.sval_page, "Svalboard")
+        self.tabs.addTab(self.tester_page, "Key tester")
         self.tabs.currentChanged.connect(lambda _i: self._disarm())
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -163,6 +176,13 @@ class MainWindow(QMainWindow):
         self.action_save.triggered.connect(self._save_backup)
         bar.addAction(self.action_save)
 
+        self.action_print = QAction("Printable layers…", self)
+        self.action_print.setToolTip(
+            "Write every layer in use to an HTML sheet, for printing."
+        )
+        self.action_print.triggered.connect(self._print_layers)
+        bar.addAction(self.action_print)
+
         self.action_load = QAction("Load backup…", self)
         self.action_load.setShortcut(QKeySequence.StandardKey.Open)
         self.action_load.triggered.connect(self._load_backup)
@@ -173,6 +193,23 @@ class MainWindow(QMainWindow):
         search.setShortcut(QKeySequence.StandardKey.Find)
         search.triggered.connect(self.picker.focus_search)
         bar.addAction(search)
+        bar.addSeparator()
+
+        self.action_typebind = QAction("Type to assign", self)
+        self.action_typebind.setCheckable(True)
+        self.action_typebind.setToolTip(
+            "Press a key on the Svalboard itself to assign it to the selected "
+            "position. Reads the switch matrix, so it works on Wayland."
+        )
+        self.action_typebind.toggled.connect(self._set_typebind)
+        bar.addAction(self.action_typebind)
+
+        self.action_serial = QAction("Advance after assigning", self)
+        self.action_serial.setCheckable(True)
+        self.action_serial.setToolTip(
+            "After assigning a key, select the next one automatically."
+        )
+        bar.addAction(self.action_serial)
         bar.addSeparator()
 
         fit = QAction("Fit board", self)
@@ -313,6 +350,9 @@ class MainWindow(QMainWindow):
         self.macro_page.bind(self._macros, self._keycodes)
         self.qmk_page.bind(self._qmk)
         self._bind_svalboard_page(state)
+        self.tester_page.bind(
+            state.layout, self._keyboard.read_matrix, rows=state.rows, cols=state.cols
+        )
         self.tapdance_page.bind(self._tapdances, self._keycodes)
         self.combo_page.bind(self._combos, self._keycodes)
         self.override_page.bind(
@@ -455,6 +495,7 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Choose a key on the board first.")
             return
         self._changes.set_key(self._current_layer(), kmid, info.code)
+        self._advance()
 
     # -- assign and edit ---------------------------------------------------------
 
@@ -656,6 +697,62 @@ class MainWindow(QMainWindow):
             self._layer_names.pop(index, None)
         self._refresh_layer_strip()
 
+    # -- typing to assign, and advancing ------------------------------------------
+
+    def _set_typebind(self, enabled: bool) -> None:
+        """Bind by pressing the key itself, read from the switch matrix.
+
+        Listening for key events would be the obvious approach and does not work:
+        Wayland does not let a program see keys sent elsewhere, and the key being
+        pressed is mapped to whatever the keymap currently says, which may be the
+        very thing being changed. Reading the matrix avoids both problems.
+        """
+        self.tester_page.set_polling(enabled)
+        if enabled:
+            self.statusBar().showMessage(
+                "Press a key on the Svalboard to assign it to the selected position.",
+                6000,
+            )
+
+    def _on_physical_press(self, row: int, col: int) -> None:
+        if self._changes is None or self._keycodes is None:
+            return
+        if not self.action_typebind.isChecked():
+            return
+        target = self.canvas.selected()
+        if target < 0:
+            self.statusBar().showMessage("Choose a position on the board first.", 4000)
+            return
+
+        source = row * self._changes.cols + col
+        if source == target:
+            return
+        code = self._changes.code(self._current_layer(), source)
+        self._changes.set_key(self._current_layer(), target, code)
+        self.statusBar().showMessage(
+            f"Assigned {self._keycodes.name(code)} from the key you pressed.", 4000
+        )
+        self._advance()
+
+    #: Traversal orders for advancing after an assignment. Down the clusters is the
+    #: Svalboard's natural reading order; across is the ordinary one.
+    def _advance(self) -> None:
+        if not self.action_serial.isChecked() or self._changes is None:
+            return
+        current = self.canvas.selected()
+        if current < 0:
+            return
+        drawn = sorted(
+            key.kmid(self._changes.cols)
+            for key in self.canvas._layout.keys
+            if key.is_key
+        ) if self.canvas._layout else []
+        if current not in drawn:
+            return
+        position = drawn.index(current)
+        if position + 1 < len(drawn):
+            self.canvas.select(drawn[position + 1])
+
     # -- the Svalboard panel -----------------------------------------------------
 
     def _bind_svalboard_page(self, state) -> None:
@@ -781,16 +878,56 @@ class MainWindow(QMainWindow):
             return
         default = str(Path.home() / "svalboard.kbi")
         chosen, _filter = QFileDialog.getSaveFileName(
-            self, "Save a backup", default, "Keyboard backups (*.kbi);;All files (*)"
+            self,
+            "Save a backup",
+            default,
+            "Keyboard backup (*.kbi);;Vial layout (*.vil);;"
+            "QMK keymap header (*.h);;All files (*)",
         )
         if not chosen:
             return
         path = Path(chosen)
         if not path.suffix:
             path = path.with_suffix(".kbi")
+
+        # The format follows the name rather than a separate control: three
+        # extensions, three formats, and no way to pick a mismatched pair.
+        state = self._keyboard.state
         try:
             backup = self._current_backup()
-            save_kbi(path, backup)
+            if path.suffix.lower() == ".vil":
+                path.write_text(
+                    to_vil(
+                        keyboard_id=state.identity.keyboard_id,
+                        layers=state.capacities.layers,
+                        rows=state.rows,
+                        cols=state.cols,
+                        codes=self._changes.working,
+                        keycodes=self._keycodes,
+                        macros=self._macros.working if self._macros else None,
+                        tap_dances=self._tapdances.working if self._tapdances else None,
+                        combos=self._combos.working if self._combos else None,
+                        key_overrides=self._overrides.working if self._overrides else None,
+                        qmk_settings={
+                            qsid: self._qmk.get(qsid) for qsid in sorted(self._qmk.supported)
+                        } if self._qmk else None,
+                    ),
+                    encoding="utf-8",
+                )
+            elif path.suffix.lower() in (".h", ".c"):
+                path.write_text(
+                    to_keymap_header(
+                        layers=state.capacities.layers,
+                        rows=state.rows,
+                        cols=state.cols,
+                        codes=self._changes.working,
+                        keycodes=self._keycodes,
+                        board=state.name,
+                    ),
+                    encoding="utf-8",
+                )
+            else:
+                save_kbi(path, backup)
         except OSError as exc:
             self._problem("Could not save", str(exc))
             return
@@ -806,12 +943,19 @@ class MainWindow(QMainWindow):
             return
         chosen, _filter = QFileDialog.getOpenFileName(
             self, "Load a backup", str(Path.home()),
-            "Keyboard backups (*.kbi *.json);;All files (*)",
+            "Keyboard backups (*.kbi *.vil *.json);;All files (*)",
         )
         if not chosen:
             return
         try:
             backup = load(Path(chosen))
+        except VilNeedsShape as exc:
+            # The keyboard is attached — this is exactly the case its shape solves.
+            from .model.files import Backup
+
+            state = self._keyboard.state
+            fields = from_vil(exc.document, rows=state.rows, cols=state.cols)
+            backup = Backup(rows=state.rows, cols=state.cols, source="vial", **fields)
         except FileFormatError as exc:
             self._problem("Could not load", str(exc))
             return
@@ -863,6 +1007,38 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"Loaded {backup.describe()}. Nothing has been written yet."
         )
+
+    def _print_layers(self) -> None:
+        if self._keyboard is None or self._changes is None:
+            return
+        state = self._keyboard.state
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Write a printable sheet",
+            str(Path.home() / "svalboard-layers.html"),
+            "HTML (*.html);;All files (*)",
+        )
+        if not chosen:
+            return
+        path = Path(chosen)
+        if not path.suffix:
+            path = path.with_suffix(".html")
+        try:
+            path.write_text(
+                to_html(
+                    layout=state.layout,
+                    codes=self._changes.working,
+                    keycodes=self._keycodes,
+                    layers=state.capacities.layers,
+                    layer_names=self._layer_names,
+                    board=state.name,
+                ),
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            self._problem("Could not write the sheet", str(exc))
+            return
+        self.statusBar().showMessage(f"Wrote {path.name}. Open it and print.")
 
     # -- export and import -------------------------------------------------------
 

@@ -38,6 +38,21 @@ class FileFormatError(Exception):
     """The file is not a keyboard backup this program can read."""
 
 
+class VilNeedsShape(Exception):
+    """A Vial .vil was recognised but needs the keyboard's matrix shape to read.
+
+    Raised rather than returned because the caller has to do something about it —
+    a .vil loaded without a keyboard attached cannot be interpreted at all.
+    """
+
+    def __init__(self, document: dict) -> None:
+        super().__init__(
+            "This is a Vial .vil file, which does not describe the keyboard it came "
+            "from. Connect the keyboard so its shape can be used."
+        )
+        self.document = document
+
+
 @dataclass
 class Backup:
     """A keyboard backup, as far as this program understands it."""
@@ -299,10 +314,9 @@ def load(path: Path) -> Backup:
     if "kbid" in payload:
         return from_kbi(payload)
     if "uid" in payload:
-        raise FileFormatError(
-            f"{path.name} is a Vial .vil file. Support for those arrives with the "
-            f"macro and tap-dance work; .kbi files load today."
-        )
+        # A .vil carries no keyboard definition, so it cannot say how wide its own
+        # rows are; the caller supplies the shape from the attached keyboard.
+        raise VilNeedsShape(payload)
     raise FileFormatError(
         f"{path.name} carries neither kbid nor uid, so it is not a keyboard backup."
     )

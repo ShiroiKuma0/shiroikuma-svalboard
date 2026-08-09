@@ -31,6 +31,7 @@ from .constants import (
     Dynamic,
     Sval,
     Via,
+    ViaValue,
     Vial,
 )
 from .dynamic import (
@@ -238,6 +239,32 @@ class Keyboard:
         self._vial(
             Vial.DYNAMIC_ENTRY_OP, Dynamic.KEY_OVERRIDE_SET, index, *entry.pack()
         )
+
+    # -- the switch matrix -------------------------------------------------------
+
+    def read_matrix(self, rows: int, cols: int) -> list[list[bool]]:
+        """Which switches are closed right now.
+
+        The reply carries two bytes of VIA header and then one bit per column,
+        packed into ceil(cols / 8) bytes per row. This is the only way to see a
+        physical press without going through the operating system's input stack —
+        which matters on Wayland, where a program cannot observe keys sent to
+        another window, and matters here regardless because the key being pressed
+        may currently be mapped to something unhelpful.
+        """
+        reply = self._via(Via.GET_KEYBOARD_VALUE, ViaValue.SWITCH_MATRIX_STATE)
+        stride = (cols + 7) // 8
+        state: list[list[bool]] = []
+        for row in range(rows):
+            offset = 2 + row * stride
+            chunk = reply[offset : offset + stride]
+            state.append(
+                [
+                    bool(chunk[col // 8] & (1 << (col % 8))) if col // 8 < len(chunk) else False
+                    for col in range(cols)
+                ]
+            )
+        return state
 
     # -- macros ------------------------------------------------------------------
 

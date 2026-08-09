@@ -112,11 +112,16 @@ def test_format_is_chosen_by_content_not_extension(tmp_path) -> None:
     assert load(path).keyboard_id == 1
 
 
-def test_a_vil_file_is_refused_with_an_explanation(tmp_path) -> None:
+def test_a_vil_file_asks_for_the_keyboard_shape(tmp_path) -> None:
+    """A .vil describes no keyboard, so it cannot be read without one attached."""
+    from svalboard.model.files import VilNeedsShape
+
     path = tmp_path / "layout.vil"
     path.write_text(json.dumps({"uid": 1, "layout": []}), encoding="utf-8")
-    with pytest.raises(FileFormatError, match="Vial .vil"):
+    with pytest.raises(VilNeedsShape) as raised:
         load(path)
+    assert raised.value.document["uid"] == 1
+    assert "does not describe the keyboard" in str(raised.value)
 
 
 def test_something_else_entirely_is_refused(tmp_path) -> None:
