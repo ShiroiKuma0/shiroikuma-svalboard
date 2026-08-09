@@ -1,0 +1,20 @@
+# Svalboard — grant the logged-in user access to the keyboard's HID interfaces.
+#
+# The 59- prefix is load-bearing. /usr/lib/udev/rules.d/73-seat-late.rules is what
+# actually applies the uaccess ACL, so a rule file sorting after 73- sets the tag too
+# late and the ACL is never applied. Vial's own documentation renamed this rule from
+# 99- to 59- for exactly this reason.
+#
+# uaccess grants access to whoever holds the active local seat, which needs no group
+# membership and no re-login. The MODE/GROUP pair is only a fallback for systems
+# without systemd-logind.
+#
+# ATTRS{} walks up to the USB device node, where the serial lives — so this necessarily
+# matches all four of the keyboard's hidraw interfaces, including the boot-keyboard one.
+# That is inherent to matching this way; the configurator only ever opens raw HID.
+#
+# Install:  sudo install -m 0644 59-svalboard.rules /etc/udev/rules.d/
+#           sudo udevadm control --reload-rules && sudo udevadm trigger
+#           (replugging the keyboard is more reliable than trigger alone)
+
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="4044", ATTRS{serial}=="*vial:f64c2b3c*", MODE="0660", GROUP="plugdev", TAG+="uaccess"
