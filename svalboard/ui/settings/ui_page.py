@@ -11,7 +11,10 @@ the indents and the row spacing on this very page follow it.
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+from datetime import datetime
+from pathlib import Path
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
@@ -123,6 +126,9 @@ class FontRow(Row):
 class UiSettingsPage(QWidget):
     """The scrollable body of the page."""
 
+    #: Asked to open the Export / Import panel.
+    eximportRequested = pyqtSignal()
+
     def __init__(self, theme: Theme, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
@@ -131,12 +137,59 @@ class UiSettingsPage(QWidget):
         self._column.setContentsMargins(0, 0, 0, 24)
         self._column.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        for index, group in enumerate(GROUPS):
-            self._add_group(group, first=index == 0)
+        self._add_eximport()
+        for group in GROUPS:
+            self._add_group(group, first=False)
         self._column.addStretch(1)
 
         theme.changed.connect(self._respace)
         self._respace()
+
+    def _add_eximport(self) -> None:
+        """The first section, ahead of appearance, as in the family's other apps."""
+        self._column.addWidget(Heading("Export / Import", self._theme, level=0))
+        row = Row(
+            "Export / Import",
+            self._theme,
+            level=1,
+            description="Save every setting to a backup, or restore one.",
+        )
+        self.eximport_status = QLabel()
+        self.eximport_status.setWordWrap(True)
+        open_button = PillButton("Open…", self._theme)
+        open_button.clicked.connect(self.eximportRequested)
+        row.add_control(open_button)
+        self._column.addWidget(row)
+
+        self.eximport_status.setContentsMargins(int(self._theme["row.indent"]), 0, 16, 4)
+        self._column.addWidget(self.eximport_status)
+        self.refresh_eximport_status()
+
+    def refresh_eximport_status(self) -> None:
+        """Mirror the backup state onto the page, red when no directory is set."""
+        from .eximport_panel import (
+            DIRECTORY_KEY,
+            NO_DIRECTORY_HINT,
+            NO_EXPORT_YET,
+        )
+        from ...model.eximport import latest_export
+
+        stored = self._theme.settings.value(DIRECTORY_KEY, "", type=str)
+        if not stored:
+            text, warning = NO_DIRECTORY_HINT, True
+        else:
+            newest = latest_export(Path(str(stored)))
+            if newest is None:
+                text, warning = NO_EXPORT_YET, True
+            else:
+                when = datetime.fromtimestamp(newest.stat().st_mtime)
+                text = f"Last export: {when:%Y-%m-%d %H:%M:%S}"
+                warning = False
+        colour = (
+            self._theme.css("window.warning") if warning else self._theme.css("window.text")
+        )
+        self.eximport_status.setText(text)
+        self.eximport_status.setStyleSheet(f"color: {colour};")
 
     def _respace(self) -> None:
         self._column.setSpacing(int(self._theme["row.spacing"]))
@@ -214,9 +267,12 @@ class UiSettingsWindow(QMainWindow):
         title = Heading(TITLE, theme, level=0)
         column.addWidget(title)
 
+        self.page = UiSettingsPage(theme)
+        self.page.eximportRequested.connect(self._open_eximport)
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setWidget(UiSettingsPage(theme))
+        scroll.setWidget(self.page)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         column.addWidget(scroll, 1)
 
@@ -231,6 +287,43 @@ class UiSettingsWindow(QMainWindow):
         self.setCentralWidget(body)
         theme.changed.connect(lambda: self.setStyleSheet(theme.stylesheet()))
         self.setStyleSheet(theme.stylesheet())
+
+    def _open_eximport(self) -> None:
+        from ...model.eximport import Archive, Category, tag_all, untag_all
+        from .eximport_panel import ExportImportPanel
+        from .font_dialog import font_directory
+
+        categories = [
+            Category(
+                "ui",
+                "白い熊 Svalboard UI (colours · fonts · sizes)",
+                collect=lambda: tag_all(self._theme.to_payload()),
+                apply=lambda payload: self._theme.from_payload(untag_all(payload)),
+            ),
+            # The rest exist as declared-but-unavailable so the panel can say why,
+            # rather than quietly omitting them and looking complete.
+            Category("keymap", "Keymap and layers",
+                     unavailable="exported from the board with Save backup"),
+            Category("macros", "Macros", unavailable="arrives with the macro editor"),
+            Category("tapdances", "Tap dances", unavailable="arrives with the tap-dance editor"),
+            Category("combos", "Combos", unavailable="arrives with the combo editor"),
+            Category("overrides", "Key overrides", unavailable="arrives with the override editor"),
+            Category("qmk", "QMK settings", unavailable="arrives with the QMK settings page"),
+            Category("layercolours", "Layer colours",
+                     unavailable="needs firmware with the Svalboard 0xEE extension"),
+        ]
+        fonts = {
+            f"fonts/{path.name}": path
+            for path in font_directory().iterdir()
+            if path.is_file() and path.suffix.lower() in (".ttf", ".otf")
+        }
+
+        panel = ExportImportPanel(
+            self._theme, Archive(categories), extra_files=fonts, parent=self
+        )
+        panel.chainFinished.connect(self.close)
+        panel.exec()
+        self.page.refresh_eximport_status()
 
     def _reset(self) -> None:
         from PyQt6.QtWidgets import QMessageBox

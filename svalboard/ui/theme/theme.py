@@ -56,6 +56,16 @@ class Theme(QObject):
         self._values: dict[str, Any] = {}
         self.reload()
 
+    @property
+    def settings(self) -> QSettings:
+        """The backing store, for the few things stored beside the theme.
+
+        The backup directory and the recent-colour swatches live here rather than in
+        the theme proper: they are facts about this machine, not appearance, and must
+        never travel in an export.
+        """
+        return self._settings
+
     # -- values ------------------------------------------------------------------
 
     def reload(self) -> None:

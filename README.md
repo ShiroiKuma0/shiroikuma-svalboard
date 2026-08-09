@@ -21,8 +21,31 @@ dropped HID report deadlocks it.
 ## Requirements
 
 - Tuxedo OS 24.04 / Ubuntu 24.04 or newer, KDE Plasma 6
-- Python 3.12, PyQt6, pyudev — all present in the distribution
+- Python 3.12 and PyQt6 — both present in the distribution
 - A `udev` rule granting access to the keyboard's raw-HID interface (installed by the `.deb`)
+
+## Installing
+
+```
+packaging/build-deb.sh
+sudo dpkg -i dist/shiroikuma-svalboard_0.1.0_all.deb
+```
+
+The package installs the udev rule and applies it, so the keyboard does not have to be
+replugged. The build needs only `dpkg-deb` and `fakeroot`; there is deliberately no
+`debhelper` dependency, since a pure-Python application has nothing to compile.
+
+To run from a checkout instead:
+
+```
+python3 -m svalboard.app
+```
+
+And to see what is attached and what it supports, without writing anything:
+
+```
+python3 -m svalboard.probe
+```
 
 ## Device access
 

@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=白い熊 Svalboard
+GenericName=Keyboard configurator
+Comment=Configure a Svalboard keyboard directly, without a browser
+Exec=shiroikuma-svalboard
+Icon=shiroikuma-svalboard
+Terminal=false
+Categories=Settings;HardwareSettings;Qt;
+Keywords=keyboard;svalboard;vial;qmk;keymap;layout;
+StartupNotify=true
+StartupWMClass=shiroikuma-svalboard

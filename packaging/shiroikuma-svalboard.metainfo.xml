@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>shiroikuma-svalboard</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+
+  <name>白い熊 Svalboard</name>
+  <summary>Configure a Svalboard keyboard directly, without a browser</summary>
+
+  <description>
+    <p>
+      A native configurator for the Svalboard, for KDE Plasma on Wayland. It talks to
+      the keyboard over hidraw, so no browser and no WebHID are involved.
+    </p>
+    <p>
+      It reads the board's own definition, so the layout it draws is whatever the
+      firmware reports rather than an assumption, and keycodes can be searched across
+      every category at once.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">shiroikuma-svalboard.desktop</launchable>
+  <url type="homepage">https://github.com/ShiroiKuma0/shiroikuma-svalboard</url>
+  <url type="bugtracker">https://github.com/ShiroiKuma0/shiroikuma-svalboard/issues</url>
+
+  <provides>
+    <binary>shiroikuma-svalboard</binary>
+  </provides>
+
+  <categories>
+    <category>Settings</category>
+    <category>HardwareSettings</category>
+  </categories>
+
+  <releases>
+    <release version="0.1.0" date="2026-08-09">
+      <description>
+        <p>Connect, read the keymap, edit it with undo, and write it back.</p>
+      </description>
+    </release>
+  </releases>
+
+  <content_rating type="oars-1.1"/>
+</component>

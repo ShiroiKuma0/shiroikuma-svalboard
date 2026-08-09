@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "shiroikuma-svalboard"
+version = "0.1.0"
+description = "Native GNU/Linux configurator for the Svalboard keyboard"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "白い熊" }]
+keywords = ["svalboard", "vial", "qmk", "keyboard", "kde", "qt"]
+classifiers = [
+    "Environment :: X11 Applications :: Qt",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Utilities",
+]
+
+# PyQt6 is deliberately not listed as a dependency: on Tuxedo OS it comes from
+# python3-pyqt6, and letting pip pull its own copy loses the system Breeze platform
+# integration. The Debian package declares it properly.
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/ShiroiKuma0/shiroikuma-svalboard"
+Source = "https://github.com/ShiroiKuma0/shiroikuma-svalboard"
+
+[project.scripts]
+shiroikuma-svalboard = "svalboard.app:main"
+
+[tool.setuptools.packages.find]
+include = ["svalboard*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
