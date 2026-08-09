@@ -1,9 +1,9 @@
 # Changelog
 
-## Unreleased
+## 1.0.0+003 — 2026-08-09
 
-Everything below is built and verified against 白い熊's Svalboard but has not yet been cut as a
-release. `pyproject.toml` still says `0.1.0`, which was set before any of this existed.
+The first release: a complete native configurator, built and verified against 白い熊's Svalboard
+throughout. Every capability below was exercised against the real hardware rather than assumed.
 
 ### The keyboard
 

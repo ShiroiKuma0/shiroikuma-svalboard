@@ -33,9 +33,13 @@
   </categories>
 
   <releases>
-    <release version="0.1.0" date="2026-08-09">
+    <release version="1.0.0" date="2026-08-09">
       <description>
-        <p>Connect, read the keymap, edit it with undo, and write it back.</p>
+        <p>
+          The first complete release: keymap, macros, tap dances, combos, key
+          overrides, QMK settings, a key tester that reads the switch matrix, and
+          backups in .kbi, .vil and QMK header form.
+        </p>
       </description>
     </release>
   </releases>
