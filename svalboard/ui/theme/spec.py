@@ -209,12 +209,13 @@ GROUPS: tuple[Group, ...] = (
     ),
     Group(
         "Key states",
-        description="How a key is tinted when it is more than an ordinary assignment.",
+        description="Key borders and markers. Keys are never filled with these — a "
+        "filled key means text on a coloured wash, which is unreadable.",
         settings=(
             colour("state.selected", "Selected", "#FFFFFF00"),
             colour("state.changed", "Changed, not yet written", "#FF8A8A00"),
-            colour("state.empty", "Disabled (KC_NO)", "#FF3A3A00"),
-            colour("state.transparent", "Transparent (KC_TRNS)", "#FF6A6A00"),
+            colour("state.empty", "Disabled (KC_NO)", "#FF6A6A00"),
+            colour("state.transparent", "Transparent glyph (KC_TRNS)", "#FF8A8A00"),
             colour("state.unset", "Never written", WARN_RED),
             colour("state.layer", "Layer key", "#FF00E5FF"),
             colour("state.modtap", "Mod-tap or layer-tap", "#FF7CFF6B"),

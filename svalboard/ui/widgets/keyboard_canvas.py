@@ -12,10 +12,10 @@ Vial boards without special-casing them.
 from __future__ import annotations
 
 import math
+import re
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import (
-    QColor,
     QFont,
     QFontMetricsF,
     QMouseEvent,
@@ -230,85 +230,174 @@ class KeyboardCanvas(QWidget):
             code = self._codes[kmid] if kmid < len(self._codes) else 0
             info = self._keycodes.info(code)
             path = self._key_path(key)
-
-            fill = theme.colour("key.background")
-            if info.is_empty:
-                fill = theme.colour("state.empty")
-            elif info.is_transparent:
-                fill = theme.colour("state.transparent")
-            elif info.kind in KIND_TINTS:
-                fill = _tinted(theme.colour(KIND_TINTS[info.kind]))
-
             changed = kmid < len(self._baseline) and self._baseline[kmid] != code
-            if changed:
-                fill = theme.colour("state.changed")
+
+            # Every key keeps the board's own background and the label keeps the
+            # label colour. State is carried by the border and a corner marker
+            # instead, because a filled key means yellow text on a coloured wash,
+            # and that is unreadable at any size.
+            painter.fillPath(path, theme.colour("key.background"))
 
             border = theme.colour("key.border")
             width = border_width
+            if info.is_empty:
+                border = theme.colour("state.empty")
+            elif info.is_unset:
+                border = theme.colour("state.unset")
+            elif info.kind in KIND_TINTS:
+                border = theme.colour(KIND_TINTS[info.kind])
+            if changed:
+                border = theme.colour("state.changed")
             if kmid == self._selected:
-                border = theme.colour("state.selected")
-                width = border_width * 2
+                border, width = theme.colour("state.selected"), border_width * 2.5
             elif kmid == self._hovered:
-                border = theme.colour("state.selected")
+                width = border_width * 1.8
 
-            painter.fillPath(path, fill)
             painter.setPen(QPen(border, width))
             painter.drawPath(path)
 
+            if changed:
+                self._draw_change_marker(painter, key)
             self._draw_label(painter, key, info)
+
+    def _key_rect(self, key: KeyPosition) -> QRectF:
+        unit = self._unit() * self._scale
+        gap_h = float(self._theme["board.gap_h"]) * self._scale
+        gap_v = float(self._theme["board.gap_v"]) * self._scale
+        return QRectF(
+            self._origin.x() + key.x * unit + gap_h / 2,
+            self._origin.y() + key.y * unit + gap_v / 2,
+            key.width * unit - gap_h,
+            key.height * unit - gap_v,
+        )
+
+    def _begin_rotation(self, painter: QPainter, key: KeyPosition) -> bool:
+        if not key.rotation_angle:
+            return False
+        unit = self._unit() * self._scale
+        pivot = QPointF(
+            self._origin.x() + key.rotation_x * unit,
+            self._origin.y() + key.rotation_y * unit,
+        )
+        painter.save()
+        painter.translate(pivot)
+        painter.rotate(key.rotation_angle)
+        painter.translate(-pivot)
+        return True
+
+    def _draw_change_marker(self, painter: QPainter, key: KeyPosition) -> None:
+        """A small filled corner wedge — an edit is visible without tinting the key."""
+        rotated = self._begin_rotation(painter, key)
+        rect = self._key_rect(key)
+        size = max(5.0, min(rect.width(), rect.height()) * 0.26)
+        wedge = QPainterPath()
+        wedge.moveTo(rect.right(), rect.top())
+        wedge.lineTo(rect.right() - size, rect.top())
+        wedge.lineTo(rect.right(), rect.top() + size)
+        wedge.closeSubpath()
+        painter.fillPath(wedge, self._theme.colour("state.changed"))
+        if rotated:
+            painter.restore()
 
     def _draw_label(self, painter: QPainter, key: KeyPosition, info) -> None:
         theme = self._theme
-        unit = self._unit() * self._scale
-        gap_h = float(theme["board.gap_h"]) * self._scale
-        rect = QRectF(
-            self._origin.x() + key.x * unit + gap_h / 2,
-            self._origin.y() + key.y * unit,
-            key.width * unit - gap_h,
-            key.height * unit,
-        )
-        if key.rotation_angle:
-            painter.save()
-            pivot = QPointF(
-                self._origin.x() + key.rotation_x * unit,
-                self._origin.y() + key.rotation_y * unit,
-            )
-            painter.translate(pivot)
-            painter.rotate(key.rotation_angle)
-            painter.translate(-pivot)
+        rotated = self._begin_rotation(painter, key)
+        rect = self._key_rect(key)
 
-        text = info.label or ""
+        strip, text = _split_label(info)
+
+        # A transparent key is only its glyph. Anything heavier turns a fall-through
+        # layer into a wall of colour, which is what layer 3 looked like.
+        if info.is_transparent:
+            painter.setFont(
+                themed_font(
+                    str(theme["key.label.font"]),
+                    int(theme["key.label.weight"]),
+                    max(6.0, float(theme["key.label.size"]) * self._scale),
+                )
+            )
+            painter.setPen(theme.colour("state.transparent"))
+            painter.drawText(rect, int(Qt.AlignmentFlag.AlignCenter), "▽")
+            if rotated:
+                painter.restore()
+            return
+
+        if info.is_empty or info.is_unset:
+            if rotated:
+                painter.restore()
+            return
+
+        body = rect
+        if strip:
+            strip_size = max(5.0, float(theme["key.sublabel.size"]) * self._scale)
+            strip_font = themed_font(
+                str(theme["key.sublabel.font"]),
+                int(theme["key.sublabel.weight"]),
+                strip_size,
+            )
+            painter.setFont(strip_font)
+            strip_height = QFontMetricsF(strip_font).height()
+            strip_rect = QRectF(
+                rect.left() + 2, rect.top() + 1, rect.width() - 4, strip_height
+            )
+            painter.setPen(
+                theme.colour(KIND_TINTS.get(info.kind, "key.sublabel.colour"))
+            )
+            painter.drawText(
+                strip_rect,
+                int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop),
+                strip,
+            )
+            body = QRectF(
+                rect.left(),
+                rect.top() + strip_height,
+                rect.width(),
+                rect.height() - strip_height,
+            )
+
         size = max(5.0, float(theme["key.label.size"]) * self._scale)
         font = themed_font(
             str(theme["key.label.font"]), int(theme["key.label.weight"]), size
         )
         # Shrink rather than clip: several Svalboard labels are three stacked words.
-        for _ in range(6):
+        for _ in range(8):
             font.setPointSizeF(size)
             metrics = QFontMetricsF(font)
             widest = max(
-                (metrics.horizontalAdvance(line) for line in text.split("\n")), default=0.0
+                (metrics.horizontalAdvance(line) for line in text.split("\n")),
+                default=0.0,
             )
-            if widest <= rect.width() - 6 or size <= 5.0:
+            if widest <= body.width() - 6 or size <= 5.0:
                 break
             size -= 1.0
 
         painter.setFont(font)
         painter.setPen(theme.colour("key.label.colour"))
         painter.drawText(
-            rect,
+            body,
             int(Qt.AlignmentFlag.AlignCenter | Qt.TextFlag.TextWordWrap),
             text,
         )
-        if key.rotation_angle:
+        if rotated:
             painter.restore()
 
 
-def _tinted(colour: QColor, alpha: int = 70) -> QColor:
-    """A state colour used as a wash rather than a fill."""
-    faded = QColor(colour)
-    faded.setAlpha(alpha)
-    return faded
+_COMPOSITE = re.compile(r"^([A-Za-z0-9_]+)\((.+)\)$")
+
+
+def _split_label(info) -> tuple[str, str]:
+    """Separate a composite keycode into a corner strip and the key's own label.
+
+    ``LCTL_T(KC_ENTER)`` is two facts — hold for Control, tap for Enter — and showing
+    only "Enter" hides half of it. The held half goes in a small strip above the
+    label. Layer operations already read as two lines and are left alone.
+    """
+    if info.kind == KIND_LAYER:
+        return "", info.label
+    match = _COMPOSITE.match(info.name)
+    if match is None:
+        return "", info.label
+    return match.group(1), info.label
 
 
 def _rotate_path(path: QPainterPath, pivot: QPointF, degrees: float) -> QPainterPath:
