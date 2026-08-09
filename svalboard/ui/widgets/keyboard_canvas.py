@@ -55,6 +55,13 @@ class KeyboardCanvas(QWidget):
 
     keySelected = pyqtSignal(int)
     keyActivated = pyqtSignal(int)
+    #: Emitted with the effective scale as a percentage whenever the zoom changes.
+    zoomChanged = pyqtSignal(float)
+
+    #: How far a single wheel notch moves the zoom, and the limits it may reach.
+    ZOOM_STEP = 1.1
+    ZOOM_MIN = 0.2
+    ZOOM_MAX = 4.0
 
     def __init__(
         self,
@@ -72,6 +79,10 @@ class KeyboardCanvas(QWidget):
         self._hovered = -1
         self._scale = 1.0
         self._origin = QPointF(0, 0)
+        # None means "fit the board to the window", which is the default and what
+        # resizing keeps doing. A number means the user has chosen a scale with
+        # Ctrl+wheel, and it is then held regardless of the window size.
+        self._zoom: float | None = None
 
         self.setMouseTracking(True)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -84,6 +95,7 @@ class KeyboardCanvas(QWidget):
         self._layout = layout
         self._keycodes = keycodes
         self._selected = -1
+        self._apply_zoom_size()
         self.updateGeometry()
         self.update()
 
@@ -108,23 +120,82 @@ class KeyboardCanvas(QWidget):
     def _unit(self) -> float:
         return float(self._theme["board.unit"])
 
+    def _board_size(self) -> tuple[float, float]:
+        if self._layout is None or not self._layout.keys:
+            return (1.0, 1.0)
+        min_x, min_y, max_x, max_y = self._layout.bounds
+        unit = self._unit()
+        return (max(1e-6, (max_x - min_x) * unit), max(1e-6, (max_y - min_y) * unit))
+
+    def _fit_scale(self) -> float:
+        width, height = self._board_size()
+        margin = 12.0
+        available_w = max(1.0, self.width() - margin * 2)
+        available_h = max(1.0, self.height() - margin * 2)
+        return min(available_w / width, available_h / height, 1.0)
+
     def _compute_scale(self) -> None:
         if self._layout is None or not self._layout.keys:
             self._scale, self._origin = 1.0, QPointF(0, 0)
             return
-        min_x, min_y, max_x, max_y = self._layout.bounds
+        min_x, min_y, _max_x, _max_y = self._layout.bounds
         unit = self._unit()
-        width = max(1e-6, (max_x - min_x) * unit)
-        height = max(1e-6, (max_y - min_y) * unit)
-        margin = 12.0
-        available_w = max(1.0, self.width() - margin * 2)
-        available_h = max(1.0, self.height() - margin * 2)
-        self._scale = min(available_w / width, available_h / height, 1.0)
+        width, height = self._board_size()
+
+        self._scale = self._zoom if self._zoom is not None else self._fit_scale()
         drawn_w, drawn_h = width * self._scale, height * self._scale
+        # Centre whatever room is left over, so a board smaller than the window sits
+        # in the middle and one larger than it starts at the edge.
         self._origin = QPointF(
-            (self.width() - drawn_w) / 2 - min_x * unit * self._scale,
-            (self.height() - drawn_h) / 2 - min_y * unit * self._scale,
+            max(0.0, (self.width() - drawn_w) / 2) - min_x * unit * self._scale,
+            max(0.0, (self.height() - drawn_h) / 2) - min_y * unit * self._scale,
         )
+
+    # -- zoom --------------------------------------------------------------------
+
+    def zoom(self) -> float | None:
+        return self._zoom
+
+    def effective_scale(self) -> float:
+        return self._zoom if self._zoom is not None else self._fit_scale()
+
+    def set_zoom(self, zoom: float | None) -> None:
+        if zoom is not None:
+            zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom))
+        self._zoom = zoom
+        self._apply_zoom_size()
+        self.update()
+        self.zoomChanged.emit(self.effective_scale())
+
+    def zoom_to_fit(self) -> None:
+        self.set_zoom(None)
+
+    def _apply_zoom_size(self) -> None:
+        """Ask for room when zoomed in, so the scroll area grows scrollbars.
+
+        In fit mode the widget stays deliberately small so it follows the window
+        instead of forcing it wider.
+        """
+        if self._zoom is None:
+            self.setMinimumSize(360, 200)
+            return
+        width, height = self._board_size()
+        self.setMinimumSize(
+            int(width * self._zoom) + 24, int(height * self._zoom) + 24
+        )
+
+    def wheelEvent(self, event) -> None:  # noqa: N802  (Qt naming)
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            notches = event.angleDelta().y() / 120.0
+            if notches:
+                # Starting from the current effective scale means the first notch
+                # continues from what is on screen rather than jumping.
+                current = self.effective_scale()
+                self.set_zoom(current * (self.ZOOM_STEP**notches))
+            event.accept()
+            return
+        # Anything else belongs to the scroll area this sits in.
+        event.ignore()
 
     def _key_path(self, key: KeyPosition) -> QPainterPath:
         unit = self._unit() * self._scale

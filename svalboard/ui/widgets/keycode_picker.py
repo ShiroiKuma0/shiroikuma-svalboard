@@ -34,26 +34,32 @@ class KeycodeButton(QWidget):
 
     chosen = pyqtSignal(object)
 
-    def __init__(self, info: KeycodeInfo, theme: Theme, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        info: KeycodeInfo,
+        theme: Theme,
+        *,
+        unit: int,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._info = info
         self._theme = theme
+        self._unit = unit
         self._hovered = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setToolTip(
             f"{info.name}\n{info.tooltip}" if info.tooltip != info.name else info.name
         )
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        theme.changed.connect(self._resize_to_theme)
-        self._resize_to_theme()
+        self.setFixedSize(unit, unit)
 
     def info(self) -> KeycodeInfo:
         return self._info
 
-    def _resize_to_theme(self) -> None:
-        unit = int(self._theme["picker.unit"])
-        self.setFixedSize(unit, unit)
-        self.update()
+    def label_scale(self) -> float:
+        """How far the key has been scaled, so its label follows."""
+        return self._unit / max(1.0, float(self._theme["picker.unit"]))
 
     def enterEvent(self, event) -> None:  # noqa: N802  (Qt naming)
         self._hovered = True
@@ -90,7 +96,7 @@ class KeycodeButton(QWidget):
         painter.drawPath(path)
 
         text = self._info.label or self._info.name.removeprefix("KC_")
-        size = float(theme["key.label.size"])
+        size = max(5.0, float(theme["key.label.size"]) * self.label_scale())
         font = themed_font(str(theme["key.label.font"]), int(theme["key.label.weight"]), size)
         for _ in range(8):
             font.setPointSizeF(size)
@@ -112,14 +118,25 @@ class KeycodePicker(QWidget):
     """A search box, a category chooser, and a grid of keycodes."""
 
     keycodeChosen = pyqtSignal(object)
+    #: Emitted with the zoom factor whenever Ctrl+wheel changes it.
+    zoomChanged = pyqtSignal(float)
 
     #: Tabs built from the connected keyboard rather than the static table.
     RUNTIME_CATEGORIES = ("Svalboard", "Layers", "Macros", "Tap dances")
+
+    ZOOM_STEP = 1.1
+    ZOOM_MIN = 0.4
+    ZOOM_MAX = 3.0
 
     def __init__(self, theme: Theme, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._theme = theme
         self._keycodes: KeycodeSet | None = None
+        self._custom_names: list[str] = []
+        self._zoom = 1.0
+        # Rebuilding 240 buttons on every resize would be wasteful, so the grid is
+        # only rebuilt when the shape it would take actually changes.
+        self._built: tuple[int, int, int] | None = None
 
         self.search = QLineEdit()
         self.search.setPlaceholderText("Search every keycode — name, label or description")
@@ -144,7 +161,8 @@ class KeycodePicker(QWidget):
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
-        scroll = QScrollArea()
+        self._scroll = QScrollArea()
+        scroll = self._scroll
         scroll.setWidgetResizable(True)
         scroll.setWidget(self._grid_host)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -211,22 +229,49 @@ class KeycodePicker(QWidget):
             ]
         return self._keycodes.category(name)
 
-    def _refresh(self) -> None:
-        while (item := self._grid.takeAt(0)) is not None:
-            widget = item.widget()
-            if widget is not None:
-                widget.deleteLater()
+    # -- zoom --------------------------------------------------------------------
 
-        entries = self._entries()
-        columns = max(1, int(self._theme["picker.columns"]))
+    def zoom(self) -> float:
+        return self._zoom
+
+    def set_zoom(self, zoom: float) -> None:
+        zoom = max(self.ZOOM_MIN, min(self.ZOOM_MAX, zoom))
+        if abs(zoom - self._zoom) < 1e-6:
+            return
+        self._zoom = zoom
+        self._refresh()
+        self.zoomChanged.emit(self._zoom)
+
+    def _unit(self) -> int:
+        return max(12, int(int(self._theme["picker.unit"]) * self._zoom))
+
+    def _columns(self, count: int) -> int:
+        """As many keys per row as the width allows, up to the declared maximum."""
         spacing = int(self._theme["picker.spacing"])
-        self._grid.setHorizontalSpacing(spacing)
-        self._grid.setVerticalSpacing(spacing)
+        available = max(1, self._scroll.viewport().width())
+        fits = max(1, (available + spacing) // (self._unit() + spacing))
+        return max(1, min(fits, int(self._theme["picker.columns"]), max(1, count)))
 
-        for position, info in enumerate(entries):
-            button = KeycodeButton(info, self._theme)
-            button.chosen.connect(self.keycodeChosen)
-            self._grid.addWidget(button, position // columns, position % columns)
+    def wheelEvent(self, event) -> None:  # noqa: N802  (Qt naming)
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            notches = event.angleDelta().y() / 120.0
+            if notches:
+                self.set_zoom(self._zoom * (self.ZOOM_STEP**notches))
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._refresh()
+
+    # -- contents ----------------------------------------------------------------
+
+    def _refresh(self) -> None:
+        entries = self._entries()
+        unit = self._unit()
+        spacing = int(self._theme["picker.spacing"])
+        columns = self._columns(len(entries))
 
         query = self.search.text().strip()
         if query and not entries:
@@ -235,3 +280,25 @@ class KeycodePicker(QWidget):
             self.status.setText(f"{len(entries)} found")
         else:
             self.status.setText(f"{len(entries)}")
+
+        # The signature has to cover *which* keycodes are shown, not just how many:
+        # two categories of equal size are a different grid.
+        shape = (hash(tuple(info.code for info in entries)), columns, unit)
+        if shape == self._built:
+            # Same grid, but a colour or font may have moved under it.
+            for button in self._grid_host.findChildren(KeycodeButton):
+                button.update()
+            return
+        self._built = shape
+
+        while (item := self._grid.takeAt(0)) is not None:
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+
+        self._grid.setHorizontalSpacing(spacing)
+        self._grid.setVerticalSpacing(spacing)
+        for position, info in enumerate(entries):
+            button = KeycodeButton(info, self._theme, unit=unit)
+            button.chosen.connect(self.keycodeChosen)
+            self._grid.addWidget(button, position // columns, position % columns)

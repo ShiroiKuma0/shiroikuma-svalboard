@@ -14,6 +14,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QScrollArea,
     QSplitter,
     QToolBar,
     QVBoxLayout,
@@ -53,13 +54,22 @@ class MainWindow(QMainWindow):
 
         self.picker = KeycodePicker(theme)
         self.picker.keycodeChosen.connect(self._assign)
+        self.picker.zoomChanged.connect(self._on_picker_zoom)
+
+        # The board lives in a scroll area so that zooming past the window can pan
+        # rather than clip. In fit mode the canvas stays small and no bars appear.
+        self.board_scroll = QScrollArea()
+        self.board_scroll.setWidgetResizable(True)
+        self.board_scroll.setWidget(self.canvas)
+        self.board_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        self.canvas.zoomChanged.connect(self._on_board_zoom)
 
         board = QWidget()
         column = QVBoxLayout(board)
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.layers)
-        column.addWidget(self.canvas, 1)
+        column.addWidget(self.board_scroll, 1)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.addWidget(board)
@@ -72,6 +82,7 @@ class MainWindow(QMainWindow):
         theme.changed.connect(lambda: self.setStyleSheet(theme.stylesheet()))
         self.setStyleSheet(theme.stylesheet())
 
+        self._restore_zooms()
         QTimer.singleShot(0, self.connect_keyboard)
 
     # -- chrome ------------------------------------------------------------------
@@ -109,6 +120,13 @@ class MainWindow(QMainWindow):
         search.setShortcut(QKeySequence.StandardKey.Find)
         search.triggered.connect(self.picker.focus_search)
         bar.addAction(search)
+        bar.addSeparator()
+
+        fit = QAction("Fit board", self)
+        fit.setShortcut(QKeySequence("Ctrl+0"))
+        fit.setToolTip("Fit the board to the window (Ctrl+0). Ctrl+wheel zooms.")
+        fit.triggered.connect(self._fit_board)
+        bar.addAction(fit)
 
         spacer = QWidget()
         spacer.setSizePolicy(spacer.sizePolicy().horizontalPolicy().Expanding,
@@ -121,6 +139,39 @@ class MainWindow(QMainWindow):
         bar.addWidget(self.settings_button)
 
         self._update_actions()
+
+    # -- zoom --------------------------------------------------------------------
+
+    #: Where the two zooms are remembered. Kept out of the theme: how close you are
+    #: looking is a property of this window, not of the appearance.
+    BOARD_ZOOM_KEY = "view/board_zoom"
+    PICKER_ZOOM_KEY = "view/picker_zoom"
+
+    def _restore_zooms(self) -> None:
+        settings = self._theme.settings
+        board = settings.value(self.BOARD_ZOOM_KEY, "", type=str)
+        if board:
+            try:
+                self.canvas.set_zoom(float(board))
+            except ValueError:
+                pass
+        picker = settings.value(self.PICKER_ZOOM_KEY, 1.0, type=float)
+        self.picker.set_zoom(float(picker))
+
+    def _fit_board(self) -> None:
+        self.canvas.zoom_to_fit()
+        self._theme.settings.remove(self.BOARD_ZOOM_KEY)
+        self.statusBar().showMessage("Board fitted to the window.", 2000)
+
+    def _on_board_zoom(self, scale: float) -> None:
+        if self.canvas.zoom() is None:
+            return
+        self._theme.settings.setValue(self.BOARD_ZOOM_KEY, f"{scale:.4f}")
+        self.statusBar().showMessage(f"Board {scale * 100:.0f}%", 1500)
+
+    def _on_picker_zoom(self, zoom: float) -> None:
+        self._theme.settings.setValue(self.PICKER_ZOOM_KEY, zoom)
+        self.statusBar().showMessage(f"Keycodes {zoom * 100:.0f}%", 1500)
 
     def _update_actions(self) -> None:
         changes = self._changes

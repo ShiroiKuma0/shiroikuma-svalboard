@@ -236,10 +236,12 @@ GROUPS: tuple[Group, ...] = (
     ),
     Group(
         "Keycode picker",
+        description="Ctrl and the mouse wheel zoom the picker; the board zooms "
+        "separately.",
         settings=(
             dimen("picker.unit", "Key size", 46, 120, 16),
             dimen("picker.spacing", "Spacing", 3, 24),
-            dimen("picker.columns", "Keys per row", 14, 40, 4, ""),
+            dimen("picker.columns", "Maximum keys per row", 24, 40, 4, ""),
         ),
     ),
     Group(
