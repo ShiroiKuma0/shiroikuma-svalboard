@@ -27,12 +27,14 @@ from PyQt6.QtWidgets import (
 
 from .hid.transport import DeviceNotPermitted, TransportError
 from .model.changes import KeymapChanges
-from .model.entries import EntryChanges, MacroChanges
+from .model.entries import EntryChanges, MacroChanges, SettingsChanges
 from .model.files import FileFormatError, build_backup, check_fits, load, save_kbi
 from .protocol.dynamic import Combo, KeyOverride, TapDance
 from .protocol.keyboard import Keyboard, ProtocolError
 from .ui.pages.entries import ComboPage, KeyOverridePage, TapDancePage
 from .ui.pages.macros import MacroPage
+from .ui.pages.qmk import QmkSettingsPage
+from .ui.pages.svalboard import SvalboardPage
 from .ui.theme import Theme
 from .ui.widgets.keyboard_canvas import KeyboardCanvas
 from .ui.widgets.keycode_picker import KeycodePicker
@@ -52,6 +54,7 @@ class MainWindow(QMainWindow):
         self._tapdances: EntryChanges | None = None
         self._combos: EntryChanges | None = None
         self._overrides: EntryChanges | None = None
+        self._qmk: SettingsChanges | None = None
         self._armed = None
         self._keycodes = None
         self._layer_names: dict[int, str] = {}
@@ -96,6 +99,9 @@ class MainWindow(QMainWindow):
         for page in (self.macro_page, self.tapdance_page, self.combo_page,
                      self.override_page):
             page.slotArmed.connect(self._arm_slot)
+        self.qmk_page = QmkSettingsPage(theme)
+        self.sval_page = SvalboardPage(theme)
+        self.sval_page.statusRequested.connect(self._read_status)
 
         self.tabs = QTabWidget()
         self.tabs.addTab(board, "Keymap")
@@ -103,6 +109,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tapdance_page, "Tap dances")
         self.tabs.addTab(self.combo_page, "Combos")
         self.tabs.addTab(self.override_page, "Key overrides")
+        self.tabs.addTab(self.qmk_page, "QMK settings")
+        self.tabs.addTab(self.sval_page, "Svalboard")
         self.tabs.currentChanged.connect(lambda _i: self._disarm())
 
         splitter = QSplitter(Qt.Orientation.Vertical)
@@ -224,7 +232,7 @@ class MainWindow(QMainWindow):
             buffer
             for buffer in (
                 self._changes, self._macros, self._tapdances,
-                self._combos, self._overrides,
+                self._combos, self._overrides, self._qmk,
             )
             if buffer is not None
         ]
@@ -238,6 +246,8 @@ class MainWindow(QMainWindow):
             # The macro buffer is written whole, so it counts as one change however
             # many macros were touched.
             total += 1
+        if self._qmk is not None:
+            total += len(self._qmk.pending())
         return total
 
     def _update_actions(self) -> None:
@@ -296,7 +306,13 @@ class MainWindow(QMainWindow):
         self._overrides.load(state.key_overrides)
         self._overrides.subscribe(self._on_changes)
 
+        self._qmk = SettingsChanges()
+        self._qmk.load(state.qmk_values, state.qmk_supported)
+        self._qmk.subscribe(self._on_changes)
+
         self.macro_page.bind(self._macros, self._keycodes)
+        self.qmk_page.bind(self._qmk)
+        self._bind_svalboard_page(state)
         self.tapdance_page.bind(self._tapdances, self._keycodes)
         self.combo_page.bind(self._combos, self._keycodes)
         self.override_page.bind(
@@ -515,12 +531,12 @@ class MainWindow(QMainWindow):
     def _buffer_for_tab(self):
         return {
             0: self._changes, 1: self._macros, 2: self._tapdances,
-            3: self._combos, 4: self._overrides,
+            3: self._combos, 4: self._overrides, 5: self._qmk,
         }.get(self.tabs.currentIndex())
 
     def _rebuild_pages(self) -> None:
         for page in (self.macro_page, self.tapdance_page, self.combo_page,
-                     self.override_page):
+                     self.override_page, self.qmk_page):
             page.rebuild()
 
     def _revert_all(self) -> None:
@@ -585,6 +601,15 @@ class MainWindow(QMainWindow):
                 if applied:
                     buffer.mark_written(applied)
 
+            if self._qmk is not None:
+                applied = []
+                for qsid, value in self._qmk.pending():
+                    self._keyboard.qmk_settings().write(qsid, value)
+                    applied.append(qsid)
+                    written += 1
+                if applied:
+                    self._qmk.mark_written(applied)
+
             # Macros go last and go whole: they share one buffer, so there is no
             # partial state to leave behind if this is the step that fails.
             if self._macros is not None and self._macros.is_dirty:
@@ -630,6 +655,96 @@ class MainWindow(QMainWindow):
         else:
             self._layer_names.pop(index, None)
         self._refresh_layer_strip()
+
+    # -- the Svalboard panel -----------------------------------------------------
+
+    def _bind_svalboard_page(self, state) -> None:
+        from .hid.console import ConsoleReader
+
+        names = [
+            str(entry.get("name") or "")
+            for entry in state.definition.get("customKeycodes") or []
+        ]
+        bindings: dict[str, list[tuple[int, int, int]]] = {}
+        per_layer = state.keys_per_layer
+        for index, code in enumerate(state.keymap):
+            name = self._keycodes.name(code)
+            if name in names:
+                layer, rest = divmod(index, per_layer)
+                row, col = divmod(rest, state.cols)
+                bindings.setdefault(name, []).append((layer, row, col))
+
+        self.sval_page.bind(
+            self._keycodes,
+            custom_names=names,
+            bindings=bindings,
+            has_extension=state.identity.has_svalboard_extension,
+            console_available=ConsoleReader().available,
+        )
+
+    def _read_status(self) -> None:
+        """Listen to the console while 白い熊 presses the Output Status key.
+
+        The host cannot trigger a keycode — only a physical press executes one — so
+        this says which key to press rather than pretending to do it.
+        """
+        from .hid.console import ConsoleReader
+        from .ui.pages.svalboard import describe_position
+
+        if self._keyboard is None or self._keycodes is None:
+            return
+        state = self._keyboard.state
+        try:
+            target = self._keycodes.parse("SV_OUTPUT_STATUS")
+        except ValueError:
+            self.sval_page.show_status(
+                "This keyboard has no Output Status keycode.", warning=True
+            )
+            return
+
+        where = []
+        per_layer = state.keys_per_layer
+        for index, code in enumerate(state.keymap):
+            if code == target:
+                layer, rest = divmod(index, per_layer)
+                row, col = divmod(rest, state.cols)
+                where.append(describe_position(layer, row, col))
+
+        if not where:
+            self.sval_page.show_status(
+                "Output Status is not bound to any key. Bind it from the picker "
+                "first, write, and then read again.",
+                warning=True,
+            )
+            return
+
+        reader = ConsoleReader()
+        if not reader.available:
+            self.sval_page.show_status("No console interface.", warning=True)
+            return
+
+        self.sval_page.show_status(f"Press Output Status now — {where[0]}.")
+        QApplication.processEvents()
+        try:
+            with reader:
+                reader.drain()
+                status = reader.read_status(seconds=6.0)
+        except OSError as exc:
+            self.sval_page.show_status(f"Could not read the console: {exc}", warning=True)
+            return
+
+        if status.is_empty:
+            self.sval_page.show_status(
+                "Nothing arrived on the console. The key may not have been pressed, "
+                "or this firmware may not print its status.",
+                warning=True,
+            )
+            return
+        summary = status.summary()
+        self.sval_page.show_status(
+            summary or "Read, but nothing recognised:\n" + "\n".join(status.raw),
+            warning=not summary,
+        )
 
     # -- backups -----------------------------------------------------------------
 

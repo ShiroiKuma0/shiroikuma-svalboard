@@ -43,6 +43,7 @@ from .dynamic import (
 from .keycodes import KeycodeSet
 from .kle import Layout, from_definition
 from .macros import Macro, deserialize_buffer, serialize_buffer
+from .qmk_settings import QmkSettings
 
 
 class ProtocolError(Exception):
@@ -95,6 +96,8 @@ class KeyboardState:
     tap_dances: list[TapDance] = field(default_factory=list)
     combos: list[Combo] = field(default_factory=list)
     key_overrides: list[KeyOverride] = field(default_factory=list)
+    qmk_supported: set[int] = field(default_factory=set)
+    qmk_values: dict[int, int] = field(default_factory=dict)
 
     @property
     def rows(self) -> int:
@@ -185,6 +188,9 @@ class Keyboard:
         state.tap_dances = self.read_tap_dances(state.capacities.tap_dances)
         state.combos = self.read_combos(state.capacities.combos)
         state.key_overrides = self.read_key_overrides(state.capacities.key_overrides)
+        settings = QmkSettings(self.transport.exchange)
+        state.qmk_supported = settings.query_supported()
+        state.qmk_values = settings.read_all()
         if state.identity.has_svalboard_extension:
             state.layer_colours = self.read_layer_colours(state.capacities.layers)
         self.state = state
@@ -354,6 +360,12 @@ class Keyboard:
         """Apply many single-key writes, in order."""
         for layer, row, col, code in changes:
             self.write_key(layer, row, col, code)
+
+    def qmk_settings(self) -> QmkSettings:
+        settings = QmkSettings(self.transport.exchange)
+        settings.supported = set(self.state.qmk_supported)
+        settings.values = dict(self.state.qmk_values)
+        return settings
 
     def write_layer_colour(self, layer: int, hue: int, saturation: int, value: int) -> None:
         if not self.state.identity.has_svalboard_extension:

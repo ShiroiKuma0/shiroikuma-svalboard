@@ -301,3 +301,108 @@ def _render(macro: Macro) -> bytes:
     from ..protocol.macros import serialize_macro
 
     return serialize_macro(macro)
+
+
+class SettingsChanges:
+    """QMK settings, keyed by QSID rather than by field.
+
+    Several booleans share one QSID, so the unit of change is the QSID: setting one
+    bit rewrites the whole value. Keeping the buffer keyed that way means the pending
+    list is exactly the set of writes to perform.
+    """
+
+    def __init__(self) -> None:
+        self._baseline: dict[int, int] = {}
+        self._working: dict[int, int] = {}
+        self._undo: list[tuple[int, int, int]] = []
+        self._redo: list[tuple[int, int, int]] = []
+        self._listeners: list[Callable[[], None]] = []
+        self.supported: set[int] = set()
+
+    def subscribe(self, listener: Callable[[], None]) -> None:
+        self._listeners.append(listener)
+
+    def _notify(self) -> None:
+        for listener in self._listeners:
+            listener()
+
+    def load(self, values: dict[int, int], supported: set[int]) -> None:
+        self._baseline = dict(values)
+        self._working = dict(values)
+        self.supported = set(supported)
+        self._undo.clear()
+        self._redo.clear()
+        self._notify()
+
+    def __len__(self) -> int:
+        return len(self._working)
+
+    def get(self, qsid: int) -> int:
+        return self._working.get(qsid, 0)
+
+    def is_changed(self, qsid: int) -> bool:
+        return self._working.get(qsid) != self._baseline.get(qsid)
+
+    @property
+    def is_dirty(self) -> bool:
+        return self._working != self._baseline
+
+    def set(self, qsid: int, value: int) -> None:
+        before = self._working.get(qsid, 0)
+        if before == value:
+            return
+        self._undo.append((qsid, before, value))
+        self._redo.clear()
+        self._working[qsid] = value
+        self._notify()
+
+    def pending(self) -> list[tuple[int, int]]:
+        return [
+            (qsid, value)
+            for qsid, value in sorted(self._working.items())
+            if self._baseline.get(qsid) != value
+        ]
+
+    def revert_all(self) -> None:
+        if not self.is_dirty:
+            return
+        self._working = dict(self._baseline)
+        self._undo.clear()
+        self._redo.clear()
+        self._notify()
+
+    @property
+    def can_undo(self) -> bool:
+        return bool(self._undo)
+
+    @property
+    def can_redo(self) -> bool:
+        return bool(self._redo)
+
+    def undo(self):
+        if not self._undo:
+            return None
+        qsid, before, after = self._undo.pop()
+        self._working[qsid] = before
+        self._redo.append((qsid, before, after))
+        self._notify()
+        return qsid
+
+    def redo(self):
+        if not self._redo:
+            return None
+        qsid, before, after = self._redo.pop()
+        self._working[qsid] = after
+        self._undo.append((qsid, before, after))
+        self._notify()
+        return qsid
+
+    def mark_written(self, qsids=None) -> None:
+        if qsids is None:
+            self._baseline = dict(self._working)
+        else:
+            for qsid in qsids:
+                self._baseline[qsid] = self._working[qsid]
+        self._undo.clear()
+        self._redo.clear()
+        self._notify()
