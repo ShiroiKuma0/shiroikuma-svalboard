@@ -147,3 +147,69 @@ def test_fit_warnings_are_advice_not_refusal() -> None:
     assert any("5×4" in warning for warning in warnings)
     assert any("only 8" in warning for warning in warnings)
     assert check_fits(Backup(layers=16, rows=10, cols=6), layers=16, rows=10, cols=6) == []
+
+
+# -- macros, tap dances, combos and key overrides ---------------------------------
+
+
+def test_all_four_features_round_trip(tmp_path, keycodes: KeycodeSet) -> None:
+    """Everything M2 added must survive a save and a load."""
+    from svalboard.protocol.dynamic import Combo, KeyOverride, TapDance
+    from svalboard.protocol.macros import Action, Macro
+
+    macros = [
+        Macro([Action("down", keycode=keycodes.parse("KC_LCTRL")),
+               Action("text", text="201c"),
+               Action("delay", delay=120),
+               Action("up", keycode=keycodes.parse("KC_LCTRL"))]),
+        Macro([]),
+    ]
+    tap_dances = [TapDance(on_tap=keycodes.parse("KC_A"), on_hold=keycodes.parse("KC_LCTRL"),
+                           tapping_term=180)]
+    combos = [Combo(keys=(keycodes.parse("KC_A"), keycodes.parse("KC_S"), 0, 0),
+                    output=keycodes.parse("KC_ESCAPE"))]
+    overrides = [KeyOverride(trigger=keycodes.parse("KC_A"),
+                             replacement=keycodes.parse("KC_B"),
+                             layers=0xFFFF, trigger_mods=0x22, suppressed_mods=0x22,
+                             options=0x87)]
+
+    backup = build_backup(
+        keyboard_id=1, layers=1, rows=1, cols=2,
+        codes=[keycodes.parse("KC_A"), 0], keycodes=keycodes,
+        macros=macros, tap_dances=tap_dances, combos=combos, key_overrides=overrides,
+    )
+    path = tmp_path / "full.kbi"
+    save_kbi(path, backup)
+    loaded = load(path)
+
+    assert loaded.macro_objects(keycodes) == macros
+    assert loaded.tap_dance_objects(keycodes) == tap_dances
+    assert loaded.combo_objects(keycodes) == combos
+    assert loaded.key_override_objects(keycodes) == overrides
+
+
+def test_keycodes_in_the_four_are_stored_as_names(tmp_path, keycodes: KeycodeSet) -> None:
+    from svalboard.protocol.dynamic import TapDance
+
+    backup = build_backup(
+        keyboard_id=1, layers=1, rows=1, cols=1, codes=[0], keycodes=keycodes,
+        tap_dances=[TapDance(on_tap=keycodes.parse("LCTL_T(KC_ENTER)"))],
+    )
+    assert to_kbi(backup)["tapdances"][0]["tap"] == "LCTL_T(KC_ENTER)"
+
+
+def test_a_keymap_only_backup_gains_no_empty_sections(keycodes: KeycodeSet) -> None:
+    """Absent features must not appear as empty lists in the file."""
+    backup = build_backup(
+        keyboard_id=1, layers=1, rows=1, cols=1, codes=[0], keycodes=keycodes
+    )
+    payload = to_kbi(backup)
+    for section in ("macros", "tapdances", "combos", "key_overrides"):
+        assert section not in payload
+
+
+def test_an_unreadable_keycode_name_does_not_abort_a_feature(keycodes: KeycodeSet) -> None:
+    backup = Backup(tap_dances=[{"tap": "KC_NONSENSE", "hold": "KC_A", "tapms": 0}])
+    entry = backup.tap_dance_objects(keycodes)[0]
+    assert entry.on_tap == 0
+    assert entry.on_hold == keycodes.parse("KC_A")

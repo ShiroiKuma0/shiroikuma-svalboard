@@ -11,10 +11,11 @@ A file is identified by its contents, not its extension: ``kbid`` means ``.kbi``
 ``uid`` means Vial's own ``.vil``. That is what the web configurator does, and files
 in the wild are named inconsistently.
 
-Only what this program can currently produce is written. Macros, tap dances, combos,
-key overrides and QMK settings arrive in later milestones; until then they are carried
-through unchanged when a file is re-saved, so loading and saving a complete backup
-never silently discards the parts not yet understood.
+Only what this program can currently produce is written — the keymap, macros, tap
+dances, combos and key overrides. QMK settings and layer colours arrive later; until
+then they are carried through unchanged when a file is re-saved, so loading and saving
+a complete backup never silently discards the parts not yet understood. A backup that
+uses none of a feature omits its section entirely rather than writing an empty one.
 """
 
 from __future__ import annotations
@@ -24,7 +25,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..protocol.dynamic import Combo, KeyOverride, TapDance
 from ..protocol.keycodes import KeycodeSet
+from ..protocol.macros import Action, Macro
 
 #: What this program writes into a file so a later version knows what made it.
 WRITER = "shiroikuma-svalboard"
@@ -48,6 +51,12 @@ class Backup:
     keymap: list[list[str]] = field(default_factory=list)
 
     layer_names: dict[int, str] = field(default_factory=dict)
+
+    #: Keycodes in these are names, exactly as in the keymap.
+    macros: list[list[list]] = field(default_factory=list)
+    tap_dances: list[dict] = field(default_factory=list)
+    combos: list[list[str]] = field(default_factory=list)
+    key_overrides: list[dict] = field(default_factory=list)
 
     #: Everything from the source file this version does not model, kept verbatim so
     #: re-saving does not throw it away.
@@ -73,10 +82,89 @@ class Backup:
         return flat
 
     def describe(self) -> str:
-        return (
-            f"{len(self.keymap)} layers × {self.keys_per_layer} positions"
-            + (f", {len(self.layer_names)} named" if self.layer_names else "")
-        )
+        parts = [f"{len(self.keymap)} layers × {self.keys_per_layer} positions"]
+        for count, name in (
+            (sum(1 for macro in self.macros if macro), "macros"),
+            (sum(1 for entry in self.tap_dances if _any_key(entry.values())), "tap dances"),
+            (sum(1 for entry in self.combos if any(entry)), "combos"),
+            (sum(1 for entry in self.key_overrides if _any_key(entry.values())), "overrides"),
+        ):
+            if count:
+                parts.append(f"{count} {name}")
+        if self.layer_names:
+            parts.append(f"{len(self.layer_names)} named layers")
+        return ", ".join(parts)
+
+    def macro_objects(self, keycodes: KeycodeSet) -> list[Macro]:
+        """Rebuild macros, resolving keycode names."""
+        macros: list[Macro] = []
+        for entry in self.macros:
+            actions: list[Action] = []
+            for item in entry:
+                if not isinstance(item, list) or not item:
+                    continue
+                kind = str(item[0])
+                value = item[1] if len(item) > 1 else ""
+                if kind == "text":
+                    actions.append(Action("text", text=str(value)))
+                elif kind == "delay":
+                    actions.append(Action("delay", delay=int(value or 0)))
+                elif kind in ("tap", "down", "up"):
+                    actions.append(Action(kind, keycode=_parse(keycodes, value)))
+            macros.append(Macro(actions))
+        return macros
+
+    def tap_dance_objects(self, keycodes: KeycodeSet) -> list[TapDance]:
+        return [
+            TapDance(
+                on_tap=_parse(keycodes, entry.get("tap")),
+                on_hold=_parse(keycodes, entry.get("hold")),
+                on_double_tap=_parse(keycodes, entry.get("doubletap")),
+                on_tap_hold=_parse(keycodes, entry.get("taphold")),
+                tapping_term=int(entry.get("tapms") or 0),
+            )
+            for entry in self.tap_dances
+        ]
+
+    def combo_objects(self, keycodes: KeycodeSet) -> list[Combo]:
+        out = []
+        for entry in self.combos:
+            names = list(entry) + [""] * (5 - len(entry))
+            out.append(
+                Combo(
+                    keys=tuple(_parse(keycodes, name) for name in names[:4]),
+                    output=_parse(keycodes, names[4]),
+                )
+            )
+        return out
+
+    def key_override_objects(self, keycodes: KeycodeSet) -> list[KeyOverride]:
+        return [
+            KeyOverride(
+                trigger=_parse(keycodes, entry.get("trigger")),
+                replacement=_parse(keycodes, entry.get("replacement")),
+                layers=int(entry.get("layers") or 0),
+                trigger_mods=int(entry.get("trigger_mods") or 0),
+                negative_mod_mask=int(entry.get("negative_mod_mask") or 0),
+                suppressed_mods=int(entry.get("suppressed_mods") or 0),
+                options=int(entry.get("options") or 0),
+            )
+            for entry in self.key_overrides
+        ]
+
+
+def _any_key(values) -> bool:
+    return any(value not in ("", "KC_NO", 0, None) for value in values)
+
+
+def _parse(keycodes: KeycodeSet, name) -> int:
+    """Resolve a stored keycode name, treating anything unreadable as disabled."""
+    if name in (None, ""):
+        return 0
+    try:
+        return keycodes.parse(name)
+    except ValueError:
+        return 0
 
 
 def build_backup(
@@ -89,8 +177,13 @@ def build_backup(
     keycodes: KeycodeSet,
     layer_names: dict[int, str] | None = None,
     passthrough: dict[str, Any] | None = None,
+    macros: list[Macro] | None = None,
+    tap_dances: list[TapDance] | None = None,
+    combos: list[Combo] | None = None,
+    key_overrides: list[KeyOverride] | None = None,
 ) -> Backup:
     per_layer = rows * cols
+    name = keycodes.name
     return Backup(
         keyboard_id=keyboard_id,
         layers=layers,
@@ -102,6 +195,45 @@ def build_backup(
         ],
         layer_names=dict(layer_names or {}),
         passthrough=dict(passthrough or {}),
+        macros=[
+            [
+                ["text", action.text]
+                if action.is_text
+                else ["delay", action.delay]
+                if action.is_delay
+                else [action.kind, name(action.keycode)]
+                for action in macro.actions
+            ]
+            for macro in (macros or [])
+        ],
+        tap_dances=[
+            {
+                "tdid": index,
+                "tap": name(entry.on_tap),
+                "hold": name(entry.on_hold),
+                "doubletap": name(entry.on_double_tap),
+                "taphold": name(entry.on_tap_hold),
+                "tapms": entry.tapping_term,
+            }
+            for index, entry in enumerate(tap_dances or [])
+        ],
+        combos=[
+            [name(key) for key in entry.keys] + [name(entry.output)]
+            for entry in (combos or [])
+        ],
+        key_overrides=[
+            {
+                "koid": index,
+                "trigger": name(entry.trigger),
+                "replacement": name(entry.replacement),
+                "layers": entry.layers,
+                "trigger_mods": entry.trigger_mods,
+                "negative_mod_mask": entry.negative_mod_mask,
+                "suppressed_mods": entry.suppressed_mods,
+                "options": entry.options,
+            }
+            for index, entry in enumerate(key_overrides or [])
+        ],
     )
 
 
@@ -122,6 +254,16 @@ def to_kbi(backup: Backup) -> dict[str, Any]:
             "keymap": backup.keymap,
         }
     )
+    for key, value in (
+        ("macros", backup.macros),
+        ("tapdances", backup.tap_dances),
+        ("combos", backup.combos),
+        ("key_overrides", backup.key_overrides),
+    ):
+        # Written only when present, so a keymap-only backup stays a keymap-only
+        # file rather than gaining four empty sections.
+        if value:
+            payload[key] = value
     cosmetic = dict(payload.get("cosmetic") or {})
     if backup.layer_names:
         cosmetic["layer"] = {str(k): v for k, v in sorted(backup.layer_names.items())}
@@ -193,7 +335,10 @@ def from_kbi(payload: dict[str, Any]) -> Backup:
         except ValueError:
             continue
 
-    known = {"kbid", "layers", "rows", "cols", "keymap", "writer", "writer_version"}
+    known = {
+        "kbid", "layers", "rows", "cols", "keymap", "writer", "writer_version",
+        "macros", "tapdances", "combos", "key_overrides",
+    }
     passthrough = {k: v for k, v in payload.items() if k not in known}
 
     return Backup(
@@ -205,6 +350,10 @@ def from_kbi(payload: dict[str, Any]) -> Backup:
         layer_names=names,
         passthrough=passthrough,
         source=str(payload.get("writer") or "keybard"),
+        macros=list(payload.get("macros") or []),
+        tap_dances=list(payload.get("tapdances") or []),
+        combos=list(payload.get("combos") or []),
+        key_overrides=list(payload.get("key_overrides") or []),
     )
 
 

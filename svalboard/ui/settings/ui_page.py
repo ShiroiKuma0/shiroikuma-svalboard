@@ -253,9 +253,18 @@ class UiSettingsPage(QWidget):
 class UiSettingsWindow(QMainWindow):
     """The page in its own window, so the board stays visible behind it."""
 
-    def __init__(self, theme: Theme, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        theme: Theme,
+        parent: QWidget | None = None,
+        *,
+        categories=None,
+    ) -> None:
         super().__init__(parent)
         self._theme = theme
+        # The categories come from whoever owns the keyboard, because only they know
+        # what is connected and what has been edited.
+        self._categories = categories
         self.setWindowTitle(TITLE)
         self.resize(760, 940)
 
@@ -293,31 +302,23 @@ class UiSettingsWindow(QMainWindow):
         from .eximport_panel import ExportImportPanel
         from .font_dialog import font_directory
 
-        categories = [
-            Category(
-                "ui",
-                "白い熊 Svalboard UI (colours · fonts · sizes)",
-                collect=lambda: tag_all(self._theme.to_payload()),
-                apply=lambda payload: self._theme.from_payload(untag_all(payload)),
-            ),
-            # The rest exist as declared-but-unavailable so the panel can say why,
-            # rather than quietly omitting them and looking complete.
-            Category("keymap", "Keymap and layers",
-                     unavailable="exported from the board with Save backup"),
-            Category("macros", "Macros", unavailable="arrives with the macro editor"),
-            Category("tapdances", "Tap dances", unavailable="arrives with the tap-dance editor"),
-            Category("combos", "Combos", unavailable="arrives with the combo editor"),
-            Category("overrides", "Key overrides", unavailable="arrives with the override editor"),
-            Category("qmk", "QMK settings", unavailable="arrives with the QMK settings page"),
-            Category("layercolours", "Layer colours",
-                     unavailable="needs firmware with the Svalboard 0xEE extension"),
-        ]
+        if self._categories is not None:
+            categories = self._categories()
+        else:
+            categories = [
+                Category(
+                    "ui",
+                    "白い熊 Svalboard UI (colours · fonts · sizes)",
+                    collect=lambda: tag_all(self._theme.to_payload()),
+                    apply=lambda payload: self._theme.from_payload(untag_all(payload)),
+                )
+            ]
+
         fonts = {
             f"fonts/{path.name}": path
             for path in font_directory().iterdir()
             if path.is_file() and path.suffix.lower() in (".ttf", ".otf")
         }
-
         panel = ExportImportPanel(
             self._theme, Archive(categories), extra_files=fonts, parent=self
         )

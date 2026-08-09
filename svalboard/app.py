@@ -5,11 +5,13 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QAction, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QInputDialog,
     QLabel,
     QMainWindow,
@@ -26,6 +28,7 @@ from PyQt6.QtWidgets import (
 from .hid.transport import DeviceNotPermitted, TransportError
 from .model.changes import KeymapChanges
 from .model.entries import EntryChanges, MacroChanges
+from .model.files import FileFormatError, build_backup, check_fits, load, save_kbi
 from .protocol.dynamic import Combo, KeyOverride, TapDance
 from .protocol.keyboard import Keyboard, ProtocolError
 from .ui.pages.entries import ComboPage, KeyOverridePage, TapDancePage
@@ -145,6 +148,17 @@ class MainWindow(QMainWindow):
         self.action_commit = QAction("Write to keyboard", self)
         self.action_commit.triggered.connect(self._commit)
         bar.addAction(self.action_commit)
+        bar.addSeparator()
+
+        self.action_save = QAction("Save backup…", self)
+        self.action_save.setShortcut(QKeySequence.StandardKey.Save)
+        self.action_save.triggered.connect(self._save_backup)
+        bar.addAction(self.action_save)
+
+        self.action_load = QAction("Load backup…", self)
+        self.action_load.setShortcut(QKeySequence.StandardKey.Open)
+        self.action_load.triggered.connect(self._load_backup)
+        bar.addAction(self.action_load)
         bar.addSeparator()
 
         search = QAction("Find keycode", self)
@@ -617,6 +631,194 @@ class MainWindow(QMainWindow):
             self._layer_names.pop(index, None)
         self._refresh_layer_strip()
 
+    # -- backups -----------------------------------------------------------------
+
+    def _current_backup(self):
+        assert self._keyboard is not None and self._changes is not None
+        state = self._keyboard.state
+        return build_backup(
+            keyboard_id=state.identity.keyboard_id,
+            layers=state.capacities.layers,
+            rows=state.rows,
+            cols=state.cols,
+            codes=self._changes.working,
+            keycodes=self._keycodes,
+            layer_names=self._layer_names,
+            macros=self._macros.working if self._macros else None,
+            tap_dances=self._tapdances.working if self._tapdances else None,
+            combos=self._combos.working if self._combos else None,
+            key_overrides=self._overrides.working if self._overrides else None,
+        )
+
+    def _save_backup(self) -> None:
+        if self._keyboard is None or self._changes is None:
+            return
+        default = str(Path.home() / "svalboard.kbi")
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self, "Save a backup", default, "Keyboard backups (*.kbi);;All files (*)"
+        )
+        if not chosen:
+            return
+        path = Path(chosen)
+        if not path.suffix:
+            path = path.with_suffix(".kbi")
+        try:
+            backup = self._current_backup()
+            save_kbi(path, backup)
+        except OSError as exc:
+            self._problem("Could not save", str(exc))
+            return
+        # What is saved is the working copy, unwritten edits included, which is worth
+        # saying rather than leaving to be discovered.
+        pending = self._pending_count()
+        note = f" (including {pending} unwritten change{'' if pending == 1 else 's'})" if pending else ""
+        self.statusBar().showMessage(f"Saved {path.name}{note}: {backup.describe()}.")
+
+    def _load_backup(self) -> None:
+        if self._keyboard is None or self._changes is None:
+            self._problem("Not connected", "Connect a keyboard before loading a backup.")
+            return
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Load a backup", str(Path.home()),
+            "Keyboard backups (*.kbi *.json);;All files (*)",
+        )
+        if not chosen:
+            return
+        try:
+            backup = load(Path(chosen))
+        except FileFormatError as exc:
+            self._problem("Could not load", str(exc))
+            return
+
+        state = self._keyboard.state
+        warnings = check_fits(
+            backup, layers=state.capacities.layers, rows=state.rows, cols=state.cols
+        )
+        detail = backup.describe()
+        if warnings:
+            detail += "\n\n" + "\n".join(warnings)
+        if not self._confirm(
+            "Load this backup?",
+            f"{detail}\n\nIt is loaded as unwritten changes, so nothing reaches the "
+            "keyboard until you write.",
+            "Load",
+        ):
+            return
+
+        self._apply_backup(backup)
+
+    def _apply_backup(self, backup) -> None:
+        assert self._changes is not None and self._keycodes is not None
+        codes = backup.codes(self._keycodes)
+        working = list(self._changes.working)
+        for index, code in enumerate(codes[: len(working)]):
+            layer, kmid = divmod(index, self._changes.keys_per_layer)
+            self._changes.set_key(layer, kmid, code)
+
+        if backup.macros and self._macros is not None:
+            for index, macro in enumerate(backup.macro_objects(self._keycodes)):
+                if index < len(self._macros):
+                    self._macros.set(index, macro)
+        for entries, buffer in (
+            (backup.tap_dance_objects(self._keycodes) if backup.tap_dances else [], self._tapdances),
+            (backup.combo_objects(self._keycodes) if backup.combos else [], self._combos),
+            (backup.key_override_objects(self._keycodes) if backup.key_overrides else [], self._overrides),
+        ):
+            if buffer is None:
+                continue
+            for index, entry in enumerate(entries):
+                if index < len(buffer):
+                    buffer.set(index, entry)
+
+        if backup.layer_names:
+            self._layer_names.update(backup.layer_names)
+        self._rebuild_pages()
+        self._show_layer(self._current_layer())
+        self.statusBar().showMessage(
+            f"Loaded {backup.describe()}. Nothing has been written yet."
+        )
+
+    # -- export and import -------------------------------------------------------
+
+    def export_categories(self) -> list:
+        """The categories the Export / Import panel offers, given what is connected."""
+        from .model.eximport import Category, tag_all, untag_all
+
+        categories = [
+            Category(
+                "ui",
+                "白い熊 Svalboard UI (colours · fonts · sizes)",
+                collect=lambda: tag_all(self._theme.to_payload()),
+                apply=lambda payload: self._theme.from_payload(untag_all(payload)),
+            )
+        ]
+        if self._keyboard is None or self._changes is None:
+            for key, title in (
+                ("keymap", "Keymap and layers"), ("macros", "Macros"),
+                ("tapdances", "Tap dances"), ("combos", "Combos"),
+                ("overrides", "Key overrides"),
+            ):
+                categories.append(
+                    Category(key, title, unavailable="no keyboard connected")
+                )
+        else:
+            categories += [
+                Category(
+                    "keymap", "Keymap and layers",
+                    collect=lambda: {
+                        "keymap": self._current_backup().keymap,
+                        "cosmetic": {str(k): v for k, v in self._layer_names.items()},
+                    },
+                    apply=self._apply_keymap_payload,
+                ),
+                Category("macros", "Macros",
+                         collect=lambda: self._current_backup().macros,
+                         apply=self._apply_macros_payload),
+                Category("tapdances", "Tap dances",
+                         collect=lambda: self._current_backup().tap_dances,
+                         apply=self._apply_tapdances_payload),
+                Category("combos", "Combos",
+                         collect=lambda: self._current_backup().combos,
+                         apply=self._apply_combos_payload),
+                Category("overrides", "Key overrides",
+                         collect=lambda: self._current_backup().key_overrides,
+                         apply=self._apply_overrides_payload),
+            ]
+        categories.append(
+            Category("layercolours", "Layer colours",
+                     unavailable="needs firmware with the Svalboard 0xEE extension")
+        )
+        return categories
+
+    def _restore(self, **fields) -> int:
+        from .model.files import Backup
+
+        backup = Backup(rows=self._changes.rows, cols=self._changes.cols, **fields)
+        self._apply_backup(backup)
+        # Only the collections are worth counting; `layers` is a number, not a
+        # payload, and taking its length is what this used to do.
+        return sum(
+            len(value) for value in fields.values() if isinstance(value, (list, dict))
+        )
+
+    def _apply_keymap_payload(self, payload) -> int:
+        keymap = payload.get("keymap") or []
+        names = {int(k): v for k, v in (payload.get("cosmetic") or {}).items() if str(k).isdigit()}
+        self._restore(keymap=keymap, layer_names=names, layers=len(keymap))
+        return len(keymap)
+
+    def _apply_macros_payload(self, payload) -> int:
+        return self._restore(macros=list(payload))
+
+    def _apply_tapdances_payload(self, payload) -> int:
+        return self._restore(tap_dances=list(payload))
+
+    def _apply_combos_payload(self, payload) -> int:
+        return self._restore(combos=list(payload))
+
+    def _apply_overrides_payload(self, payload) -> int:
+        return self._restore(key_overrides=list(payload))
+
     # -- settings ----------------------------------------------------------------
 
     def _open_settings(self) -> None:
@@ -625,7 +827,7 @@ class MainWindow(QMainWindow):
     def _open_ui_settings(self) -> None:
         from .ui.settings.ui_page import UiSettingsWindow
 
-        window = UiSettingsWindow(self._theme, self)
+        window = UiSettingsWindow(self._theme, self, categories=self.export_categories)
         window.show()
 
     def closeEvent(self, event) -> None:  # noqa: N802  (Qt naming)
