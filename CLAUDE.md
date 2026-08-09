@@ -152,12 +152,29 @@ glyph at ~60–65 % of the canvas, **no frame ring**, fill black or transparent 
 `viewBox="0 0 512 512"`, `<rect width="512" height="512" rx="96" fill="#000000"/>`,
 `stroke-width="21"` (≈4 % of width; 17 vanishes at 16 px, 26 closes the counters).
 
+## Skills
+
+`.claude/skills/` carries three, mirroring the family's conventions:
+
+- **build-deb** — build the package into `~/tmp`, bumping `packaging/build-number`.
+- **publish-version** — cut a GitHub release of a `.deb` already built.
+- **verify-hardware** — check against the real keyboard safely, read-only first.
+
+There is deliberately **no `upstream-new-version`**: unlike most sister repos this is not a
+fork. There is no upstream to track, no `custom` branch, and the release is cut from `main`.
+Note also that the remote here is named **`upstream`**, not `origin` — the *global*
+`publish-version` skill derives the repo from `origin` and would fail, which is why the
+repo-local one exists.
+
 ## Building
 
 `packaging/build-deb.sh` writes the `.deb` to **`~/tmp`**, never into the repository.
 There is deliberately no `dist/` directory: build output is not source, and keeping it
 inside the tree only invites it being committed or shipped by accident. Pass a
-directory argument to override.
+directory argument to override. Every delivered build takes the next
+`packaging/build-number`, zero-padded to three digits, so artefacts accumulate in `~/tmp`
+and sort in build order; the counter is committed, because it records what has been
+delivered. `SVALBOARD_NO_BUMP=1` rebuilds without consuming a number.
 
 ## Style
 

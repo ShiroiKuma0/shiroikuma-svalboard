@@ -22,13 +22,27 @@ root="$(dirname "$here")"
 outdir="${1:-$HOME/tmp}"
 
 package="shiroikuma-svalboard"
-version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/pyproject.toml" | head -1)"
+release="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/pyproject.toml" | head -1)"
 architecture="all"
 
-if [[ -z "$version" ]]; then
+if [[ -z "$release" ]]; then
     echo "Could not read the version out of pyproject.toml." >&2
     exit 1
 fi
+
+# Every delivered build gets its own number, as everywhere else in the family: the
+# artefacts accumulate in ~/tmp rather than overwriting each other, and a number is
+# never reused. Zero-padded to three digits so the names sort in build order —
+# unpadded, +10 sorts before +3 and buries the newest build. dpkg still compares
+# digit runs numerically, so padding does not disturb upgrade ordering.
+counter_file="$here/build-number"
+counter=$(( $(cat "$counter_file" 2>/dev/null || echo 0) + 1 ))
+if [[ "${SVALBOARD_NO_BUMP:-}" != "1" ]]; then
+    printf '%s\n' "$counter" > "$counter_file"
+else
+    counter=$(cat "$counter_file")
+fi
+version="$(printf '%s+%03d' "$release" "$counter")"
 
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT

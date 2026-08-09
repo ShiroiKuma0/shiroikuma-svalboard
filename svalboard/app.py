@@ -54,6 +54,16 @@ from .ui.widgets.settings_button import SettingsButton
 APPLICATION_NAME = "白い熊 Svalboard"
 
 
+def version() -> str:
+    """The release, plus the build number if this copy came from a package."""
+    from importlib.metadata import PackageNotFoundError, version as installed
+
+    try:
+        return installed("shiroikuma-svalboard")
+    except PackageNotFoundError:
+        return "0.1.0 (from a checkout)"
+
+
 class MainWindow(QMainWindow):
     def __init__(self, theme: Theme) -> None:
         super().__init__()
