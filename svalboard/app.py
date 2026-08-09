@@ -733,18 +733,29 @@ class MainWindow(QMainWindow):
             self.sval_page.show_status(f"Could not read the console: {exc}", warning=True)
             return
 
-        if status.is_empty:
+        if status.recognised:
+            self.sval_page.show_status(status.summary())
+            return
+
+        # A live keyboard fills this console with key-logger chatter, so "something
+        # arrived" is not evidence the status did. Say which happened.
+        if status.keylog_lines and not status.raw:
+            self.sval_page.show_status(
+                f"The console is alive — {status.keylog_lines} key events were seen — "
+                "but no status arrived. Was the Output Status key the one pressed?",
+                warning=True,
+            )
+        elif status.raw:
+            shown = "\n".join(status.raw[:6])
+            self.sval_page.show_status(
+                f"Read, but nothing recognised:\n{shown}", warning=True
+            )
+        else:
             self.sval_page.show_status(
                 "Nothing arrived on the console. The key may not have been pressed, "
                 "or this firmware may not print its status.",
                 warning=True,
             )
-            return
-        summary = status.summary()
-        self.sval_page.show_status(
-            summary or "Read, but nothing recognised:\n" + "\n".join(status.raw),
-            warning=not summary,
-        )
 
     # -- backups -----------------------------------------------------------------
 
