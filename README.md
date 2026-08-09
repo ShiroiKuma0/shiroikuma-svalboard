@@ -28,8 +28,11 @@ dropped HID report deadlocks it.
 
 ```
 packaging/build-deb.sh
-sudo dpkg -i dist/shiroikuma-svalboard_0.1.0_all.deb
+sudo dpkg -i ~/tmp/shiroikuma-svalboard_0.1.0_all.deb
 ```
+
+The package is written to `~/tmp`, never into the repository — build output is not
+source.
 
 The package installs the udev rule and applies it, so the keyboard does not have to be
 replugged. The build needs only `dpkg-deb` and `fakeroot`; there is deliberately no

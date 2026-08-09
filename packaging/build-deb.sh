@@ -9,13 +9,17 @@
 # build-dependency on debhelper and dh-python without doing anything this script does
 # not, and this way the package builds on a machine with only dpkg installed.
 #
+# The package is written to ~/tmp by default, never into the repository: build output
+# is not source, and a dist/ directory inside the tree only invites it being committed
+# or shipped by accident.
+#
 # Usage:  packaging/build-deb.sh [output-directory]
 
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(dirname "$here")"
-outdir="${1:-$root/dist}"
+outdir="${1:-$HOME/tmp}"
 
 package="shiroikuma-svalboard"
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' "$root/pyproject.toml" | head -1)"

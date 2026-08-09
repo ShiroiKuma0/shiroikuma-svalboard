@@ -4,7 +4,6 @@ __pycache__/
 .venv/
 venv/
 build/
-dist/
 *.deb
 *.buildinfo
 *.changes

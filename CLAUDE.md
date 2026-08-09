@@ -152,6 +152,13 @@ glyph at ~60–65 % of the canvas, **no frame ring**, fill black or transparent 
 `viewBox="0 0 512 512"`, `<rect width="512" height="512" rx="96" fill="#000000"/>`,
 `stroke-width="21"` (≈4 % of width; 17 vanishes at 16 px, 26 closes the counters).
 
+## Building
+
+`packaging/build-deb.sh` writes the `.deb` to **`~/tmp`**, never into the repository.
+There is deliberately no `dist/` directory: build output is not source, and keeping it
+inside the tree only invites it being committed or shipped by accident. Pass a
+directory argument to override.
+
 ## Style
 
 - Prose in commits, comments and UI strings follows 白い熊's typographic conventions: curly quotes
