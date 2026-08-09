@@ -118,6 +118,8 @@ class KeycodePicker(QWidget):
     """A search box, a category chooser, and a grid of keycodes."""
 
     keycodeChosen = pyqtSignal(object)
+    #: Emitted with the xkb layout code, or "" for none.
+    layoutChanged = pyqtSignal(str)
     #: Emitted with the zoom factor whenever Ctrl+wheel changes it.
     zoomChanged = pyqtSignal(float)
 
@@ -146,6 +148,13 @@ class KeycodePicker(QWidget):
         self.category = QComboBox()
         self.category.currentIndexChanged.connect(lambda _index: self._refresh())
 
+        self.layout_box = QComboBox()
+        self.layout_box.setToolTip(
+            "Label keys by what they type on this computer's keyboard layout. "
+            "Only the labels change; the keycodes written to the keyboard do not."
+        )
+        self.layout_box.currentIndexChanged.connect(self._on_layout_changed)
+
         self.status = QLabel()
         self.status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
@@ -154,6 +163,7 @@ class KeycodePicker(QWidget):
         controls.setSpacing(8)
         controls.addWidget(self.search, 1)
         controls.addWidget(self.category)
+        controls.addWidget(self.layout_box)
         controls.addWidget(self.status)
 
         self._grid_host = QWidget()
@@ -188,6 +198,26 @@ class KeycodePicker(QWidget):
         index = self.category.findText("basic")
         self.category.setCurrentIndex(index if index >= 0 else 0)
         self.category.blockSignals(blocked)
+        self._refresh()
+
+    def populate_layouts(self, current: str = "") -> None:
+        from ...protocol.layouts import available
+
+        blocked = self.layout_box.blockSignals(True)
+        self.layout_box.clear()
+        self.layout_box.addItem("US labels", "")
+        for code, name in available():
+            self.layout_box.addItem(name, code)
+        index = self.layout_box.findData(current)
+        self.layout_box.setCurrentIndex(index if index >= 0 else 0)
+        self.layout_box.blockSignals(blocked)
+
+    def _on_layout_changed(self, _index: int) -> None:
+        self.layoutChanged.emit(str(self.layout_box.currentData() or ""))
+
+    def refresh_labels(self) -> None:
+        """Rebuild after the labels beneath the grid have changed."""
+        self._built = None
         self._refresh()
 
     def focus_search(self) -> None:

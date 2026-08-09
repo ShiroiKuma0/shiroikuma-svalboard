@@ -179,6 +179,39 @@ class KeycodeSet:
             # still load on a board that calls it SV_MH_CHANGE_TIMEOUTS.
             self._by_name[f"USER{index:02d}"] = code
 
+    # -- keyboard layout ---------------------------------------------------------
+
+    def apply_layout(self, glyphs: dict[str, tuple[str, str]] | None) -> None:
+        """Relabel keys by what they type on a given keyboard layout.
+
+        A keycode names a position, not a character, so on a Czech or German layout
+        ``KC_Y`` types ``z``. Only the label changes — the keycode written to the
+        keyboard is unaffected, and searching by name still works, because the layout
+        is a fact about the computer rather than about the keyboard.
+        """
+        self._labels = dict(LABELS)
+        self._layout_glyphs = dict(glyphs or {})
+        if not glyphs:
+            return
+
+        shift = KEYCODES.get("QK_LSFT", 0x0200)
+        for name, (unshifted, shifted) in glyphs.items():
+            code = self._by_name.get(name)
+            if code is None:
+                continue
+            if unshifted:
+                self._labels[name] = unshifted
+            # The shifted form is its own keycode — KC_EXLM rather than LSFT(KC_1) —
+            # so it needs relabelling separately or it keeps the US character.
+            if shifted and code <= 0xFF:
+                shifted_name = self._by_code.get(shift | code)
+                if shifted_name:
+                    self._labels[shifted_name] = shifted
+
+    @property
+    def layout_glyphs(self) -> dict[str, tuple[str, str]]:
+        return dict(getattr(self, "_layout_glyphs", {}))
+
     # -- naming ------------------------------------------------------------------
 
     def name(self, code: int) -> str:

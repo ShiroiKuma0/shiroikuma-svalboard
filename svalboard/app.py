@@ -84,6 +84,7 @@ class MainWindow(QMainWindow):
         self.picker = KeycodePicker(theme)
         self.picker.keycodeChosen.connect(self._assign)
         self.picker.zoomChanged.connect(self._on_picker_zoom)
+        self.picker.layoutChanged.connect(self._set_input_layout)
 
         # The board lives in a scroll area so that zooming past the window can pan
         # rather than clip. In fit mode the canvas stays small and no bars appear.
@@ -366,6 +367,9 @@ class MainWindow(QMainWindow):
             self._keycodes,
             [entry.get("name", "") for entry in state.definition.get("customKeycodes") or []],
         )
+        stored = self._theme.settings.value(self.LAYOUT_KEY, "", type=str)
+        self.picker.populate_layouts(str(stored))
+        self._set_input_layout(str(stored), persist=False)
         self._show_layer(0)
 
         identity = state.identity
@@ -696,6 +700,41 @@ class MainWindow(QMainWindow):
         else:
             self._layer_names.pop(index, None)
         self._refresh_layer_strip()
+
+    #: The computer's keyboard layout, remembered beside the zooms: it describes
+    #: this machine rather than the keyboard, and has no place in an export.
+    LAYOUT_KEY = "view/input_layout"
+
+    def _set_input_layout(self, code: str, *, persist: bool = True) -> None:
+        """Relabel keys by what they type on the chosen layout.
+
+        This changes labels only. The keycode written to the keyboard is a position,
+        not a character, so a Czech layout does not change what gets written — it
+        changes what the position is called on this computer.
+        """
+        from .protocol.layouts import load
+
+        if self._keycodes is None:
+            return
+        glyphs = None
+        name = "US labels"
+        if code:
+            layout = load(code)
+            if layout is None:
+                self.statusBar().showMessage(f"Could not read the {code} layout.", 4000)
+                return
+            glyphs, name = layout.glyphs, layout.name
+
+        self._keycodes.apply_layout(glyphs)
+        if persist:
+            if code:
+                self._theme.settings.setValue(self.LAYOUT_KEY, code)
+            else:
+                self._theme.settings.remove(self.LAYOUT_KEY)
+        self.picker.refresh_labels()
+        self._show_layer(self._current_layer())
+        self._rebuild_pages()
+        self.statusBar().showMessage(f"Keys labelled for {name}.", 4000)
 
     # -- typing to assign, and advancing ------------------------------------------
 
