@@ -1,0 +1,46 @@
+shiroikuma-svalboard — 白い熊 Svalboard
+Copyright (C) 2026 白い熊
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version. See LICENSE for the full text.
+
+
+Third-party material
+====================
+
+Vial-GPU / vial-gui — https://github.com/vial-kb/vial-gui
+    SPDX-License-Identifier: GPL-2.0-or-later
+    Copyright (C) the Vial contributors
+
+    The VIA/Vial protocol implementation under `svalboard/protocol/`, the KLE
+    deserialiser in `svalboard/protocol/kle.py`, the keycode tables under
+    `svalboard/protocol/keycodes/`, and the QMK settings schema in
+    `svalboard/protocol/qmk_settings.py` are adapted from vial-gui. Adapted
+    files carry their original SPDX headers. vial-gui is GPL-2.0-or-later, and
+    this work exercises the "or later" option to combine it with PyQt6 under
+    GPL-3.0.
+
+vial-qmk / Svalboard firmware — https://github.com/svalboard/vial-qmk
+    SPDX-License-Identifier: GPL-2.0-or-later
+    Copyright (C) the QMK, Vial and Svalboard contributors
+
+    Protocol constants, the Svalboard `0xEE` command channel, the Vial unlock
+    sequence, matrix geometry and firmware capacity limits were read from this
+    source and are reproduced here as interface facts.
+
+QMK Firmware — https://github.com/qmk/qmk_firmware
+    SPDX-License-Identifier: GPL-2.0-or-later
+
+    Keycode names, values and descriptions derive from QMK's headers.
+
+
+A note on KeyBard
+=================
+
+KeyBard (https://github.com/captdeaf/keybard and
+https://github.com/svalboard/keybard-ng) is the web configurator this program
+replaces. Neither repository carries a LICENSE file, so no code from either is
+used here. KeyBard was consulted only as a description of observable behaviour
+and wire formats — facts about how the hardware speaks, not expression.
