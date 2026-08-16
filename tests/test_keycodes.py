@@ -17,9 +17,14 @@ from svalboard.protocol.keycodes import (
     KIND_MACRO,
     KIND_MASKED,
     KIND_TAP_DANCE,
+    KIND_TEMPLATE,
     KIND_UNSET,
+    MODIFIER_RIGHT,
     UNSET,
     KeycodeSet,
+    modifiable,
+    modifier_mask,
+    with_modifiers,
 )
 
 #: A slice of the Svalboard's own definition, enough to name the SV_* keys.
@@ -130,3 +135,84 @@ def test_custom_keycodes_carry_their_own_labels(keycodes: KeycodeSet) -> None:
     assert info.name == "SV_LEFT_DPI_INC"
     assert info.label == "Left\nDPI +"
     assert info.tooltip == "Increase left DPI"
+
+
+# -- composed keycodes -----------------------------------------------------------
+
+
+def test_layer_taps_are_offered_one_per_layer(keycodes: KeycodeSet) -> None:
+    """LT is a template, not a keycode: it needs the key it types when tapped."""
+    templates = keycodes.layer_taps()
+    assert [info.name for info in templates] == [f"LT{n}(kc)" for n in range(16)]
+    assert {info.kind for info in templates} == {KIND_TEMPLATE}
+    assert "layer 2" in templates[2].tooltip
+
+
+def test_layer_taps_stop_at_sixteen() -> None:
+    """The keycode has four bits for the layer however many the board has."""
+    assert len(KeycodeSet(layers=32).layer_taps()) == 16
+
+
+def test_modifier_tab_offers_its_templates(keycodes: KeycodeSet) -> None:
+    """LGUI(kc) used to be filtered out of the tab, unreachable except by typing."""
+    names = {info.name for info in keycodes.category("modifiers")}
+    assert {"LGUI(kc)", "LCTL_T(kc)", "HYPR(kc)"} <= names
+
+
+def test_composing_fills_the_hole(keycodes: KeycodeSet) -> None:
+    outer = keycodes.parse("LT2(kc)")
+    assert keycodes.compose(outer, keycodes.parse("KC_SPACE")) == 0x422C
+    assert keycodes.name(0x422C) == "LT2(KC_SPACE)"
+
+    assert keycodes.compose(keycodes.parse("LGUI(kc)"), 0x1E) == 0x081E
+    assert keycodes.name(0x081E) == "LGUI(KC_1)"
+
+
+def test_only_a_basic_keycode_fits_inside_a_template(keycodes: KeycodeSet) -> None:
+    assert keycodes.composable(keycodes.parse("KC_SPACE"))
+    assert not keycodes.composable(keycodes.parse("MO(2)"))
+    assert not keycodes.composable(keycodes.parse("M0"))
+
+
+# -- editing the modifiers on an existing key ------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (0x001E, True),   # KC_1
+        (0x081E, True),   # LGUI(KC_1) — already modified
+        (0x2200, True),   # LSFT_T(KC_NO) — a mod-tap wears the same bits
+        (0x422C, False),  # LT2(KC_SPACE) — those bits are the layer
+        (0x5222, False),  # MO(2)
+        (0x7700, False),  # M0
+    ],
+)
+def test_which_keys_can_take_modifiers(code: int, expected: bool) -> None:
+    assert modifiable(code) is expected
+
+
+def test_adding_and_removing_modifiers(keycodes: KeycodeSet) -> None:
+    """Super+1 without knowing it is spelled LGUI(KC_1)."""
+    code = with_modifiers(0x001E, 0x0800)
+    assert keycodes.name(code) == "LGUI(KC_1)"
+    assert modifier_mask(code) == 0x0800
+
+    both = with_modifiers(code, 0x0800 | MODIFIER_RIGHT)
+    assert keycodes.name(both) == "RGUI(KC_1)"
+
+    assert with_modifiers(both, 0) == 0x001E
+
+
+def test_unnameable_modifier_combinations_still_read_correctly(
+    keycodes: KeycodeSet,
+) -> None:
+    """Vial names 18 of the 30 combinations; the rest are not broken keycodes."""
+    code = with_modifiers(0x001E, 0x1700)  # right Ctrl+Shift+Alt
+    info = keycodes.info(code)
+    assert info.name == "0x171E"
+    assert info.kind == KIND_MASKED
+    assert info.label == keycodes.info(0x001E).label
+    assert "RCtl+RSft+RAlt" in info.tooltip
+    # And it survives a round trip through a file, which stores the name.
+    assert keycodes.parse(info.name) == code

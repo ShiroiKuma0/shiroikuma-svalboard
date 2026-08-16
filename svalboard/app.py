@@ -40,6 +40,13 @@ from .model.files import (
 )
 from .protocol.dynamic import Combo, KeyOverride, TapDance
 from .protocol.keyboard import Keyboard, ProtocolError
+from .protocol.keycodes import (
+    MODIFIER_RIGHT,
+    MODIFIERS,
+    modifiable,
+    modifier_mask,
+    with_modifiers,
+)
 from .ui.pages.entries import ComboPage, KeyOverridePage, TapDancePage
 from .ui.pages.macros import MacroPage
 from .ui.pages.qmk import QmkSettingsPage
@@ -78,6 +85,8 @@ class MainWindow(QMainWindow):
         self._armed = None
         self._keycodes = None
         self._layer_names: dict[int, str] = {}
+        self._sized_to_content = False
+        self._absorbed = False
 
         self.setWindowTitle(APPLICATION_NAME)
         self.resize(1500, 900)
@@ -137,11 +146,11 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.tester_page, "Key tester")
         self.tabs.currentChanged.connect(lambda _i: self._disarm())
 
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        splitter.addWidget(self.tabs)
-        splitter.addWidget(self.picker)
-        splitter.setSizes([520, 380])
-        self.setCentralWidget(splitter)
+        self.splitter = QSplitter(Qt.Orientation.Vertical)
+        self.splitter.addWidget(self.tabs)
+        self.splitter.addWidget(self.picker)
+        self.splitter.setSizes([520, 380])
+        self.setCentralWidget(self.splitter)
 
         self._build_toolbar()
         self.statusBar().showMessage("Not connected.")
@@ -258,6 +267,124 @@ class MainWindow(QMainWindow):
                 pass
         picker = settings.value(self.PICKER_ZOOM_KEY, 1.0, type=float)
         self.picker.set_zoom(float(picker))
+
+    # -- opening at a size that fits ----------------------------------------------
+
+    def _size_to_content(self) -> None:
+        """Open large enough that neither the board nor the picker starts scrolled.
+
+        The board's size is not known until the keyboard hands over its own KLE, so
+        this cannot happen in the constructor; it happens the first time a board
+        loads, and only then. Everything is clamped to the screen — on a monitor too
+        small for the board the scroll areas are still there and still work, which is
+        what "if the screen allows" comes down to.
+        """
+        if self._sized_to_content:
+            return
+        board_w, board_h = self.canvas.natural_size()
+        if not board_w or not board_h:
+            return
+        self._sized_to_content = True
+
+        # Measured rather than guessed: the toolbar, tab bar, status bar and window
+        # frame differ between themes and between Wayland compositors.
+        central = self.centralWidget()
+        chrome_w = max(0, self.width() - central.width())
+        chrome_h = max(0, self.height() - central.height())
+        # Everything the board pane spends on something other than the board — the
+        # tab bar, the layer strip, the frames. Measured, because the layer strip's
+        # own sizeHint reports 12 px for a row that is nearer 43, and estimating from
+        # it leaves the board a scrollbar short.
+        overhead = max(0, self.tabs.height() - self.board_scroll.viewport().height())
+        handle = self.splitter.handleWidth()
+
+        # Room for a scrollbar that then turns out not to be needed. Sized to the
+        # exact pixel, a board one bar short grows a vertical bar, which narrows the
+        # viewport, which grows a horizontal bar, which shortens it again.
+        slack = self.board_scroll.verticalScrollBar().sizeHint().width()
+
+        board_pane = board_h + overhead + slack
+        width = board_w + chrome_w + slack
+
+        screen = self.screen() or QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen is not None else None
+        if available is not None:
+            width = min(width, available.width())
+
+        # Asked for at the width the window is about to have, not the one it has:
+        # a wider grid needs fewer rows, and measuring before the resize would ask
+        # for rows that turn out to be empty.
+        picker_h = self.picker.ideal_height(width=width)
+        height = board_pane + handle + picker_h + chrome_h
+        if available is not None:
+            height = min(height, available.height())
+
+        self._target = (width, height, board_pane, chrome_h, handle)
+        self._settle_size(self.SIZE_ATTEMPTS)
+
+    #: How many times the target size is applied before giving up on it.
+    SIZE_ATTEMPTS = 4
+
+    def _settle_size(self, attempts: int) -> None:
+        """Apply the target size, then check that it actually stuck.
+
+        Loading the keyboard blocks the GUI thread for a couple of seconds, and the
+        compositor's configure events queue up behind it. Applied once, the new size
+        is overwritten by a stale one the instant the event loop starts turning
+        again — the window snaps back to what it was before. So it is applied,
+        verified a beat later, and applied again if it did not take.
+        """
+        width, height, board_pane, chrome_h, handle = self._target
+        if (self.width(), self.height()) != (width, height):
+            self.resize(width, height)
+
+        # Give the board exactly what it asked for and the picker the remainder, so
+        # a window clamped by the screen takes the shortfall out of the picker —
+        # which scrolls gracefully — rather than out of the board, which does not.
+        remaining = max(1, height - chrome_h - board_pane - handle)
+        self.splitter.setSizes([board_pane, remaining])
+
+        # Checked on a later turn, never here: resize() updates the widget's own
+        # geometry at once, so asking now would always say it worked.
+        if attempts > 1:
+            QTimer.singleShot(150, lambda: self._verify_size(attempts - 1))
+            return
+        QTimer.singleShot(0, self._absorb_board_scrollbar)
+
+    def _verify_size(self, attempts: int) -> None:
+        width, height, *_ = self._target
+        if (self.width(), self.height()) == (width, height):
+            QTimer.singleShot(0, self._absorb_board_scrollbar)
+            return
+        self._settle_size(attempts)
+
+    def _absorb_board_scrollbar(self) -> None:
+        """Take back whatever the board still cannot show.
+
+        The last word, once the layout has settled: any remaining shortfall comes out
+        of the screen if there is room left, and out of the picker if there is not —
+        the picker scrolls gracefully and the board does not.
+        """
+        if self._absorbed:
+            return
+        shortfall = self.board_scroll.verticalScrollBar().maximum()
+        if shortfall <= 0:
+            return
+        self._absorbed = True
+
+        screen = self.screen()
+        room = (
+            max(0, screen.availableGeometry().height() - self.height())
+            if screen is not None
+            else 0
+        )
+        grow = min(shortfall, room)
+        if grow:
+            self.resize(self.width(), self.height() + grow)
+        board, picker = self.splitter.sizes()
+        self.splitter.setSizes(
+            [board + shortfall, max(1, picker + grow - shortfall)]
+        )
 
     def _fit_board(self) -> None:
         self.canvas.zoom_to_fit()
@@ -381,6 +508,10 @@ class MainWindow(QMainWindow):
         self.picker.populate_layouts(str(stored))
         self._set_input_layout(str(stored), persist=False)
         self._show_layer(0)
+        # Last, and on the next turn of the event loop: the layer strip has just
+        # gained its buttons and the picker its controls, and measuring either
+        # before Qt has laid them out reports them far smaller than they end up.
+        QTimer.singleShot(0, self._size_to_content)
 
         identity = state.identity
         extension = (
@@ -445,6 +576,8 @@ class MainWindow(QMainWindow):
             lambda: self._set_selected("KC_TRNS")
         )
         menu.addSeparator()
+        self._add_modifier_menu(menu)
+        menu.addSeparator()
         menu.addAction("Assign and edit a macro").triggered.connect(
             self._assign_macro_here
         )
@@ -471,6 +604,79 @@ class MainWindow(QMainWindow):
             self._changes.set_key(
                 self._current_layer(), kmid, self._keycodes.parse(name)
             )
+
+    def _set_selected_code(self, code: int) -> None:
+        if self._changes is None:
+            return
+        kmid = self.canvas.selected()
+        if kmid >= 0:
+            self._changes.set_key(self._current_layer(), kmid, code)
+
+    # -- editing the modifiers on a key already assigned --------------------------
+
+    def _add_modifier_menu(self, menu: QMenu) -> None:
+        """A submenu that adds Ctrl, Shift, Alt or Super to the key as it stands.
+
+        Editing rather than replacing: the whole point is to take the key already
+        under the cursor and put a modifier on it, without having to know that the
+        result is spelled ``LGUI(KC_1)`` or having to find it in the picker.
+        """
+        if self._changes is None or self._keycodes is None:
+            return
+        code = self._changes.code(self._current_layer(), self.canvas.selected())
+        submenu = menu.addMenu("Modifiers")
+
+        if not modifiable(code):
+            # Layer operations, macros, tap dances and the Svalboard's own keycodes
+            # have no room: the bits a modifier would use mean something else there.
+            submenu.setEnabled(False)
+            submenu.setTitle("Modifiers — not available for this key")
+            return
+
+        mask = modifier_mask(code)
+        for bit, title in MODIFIERS:
+            action = submenu.addAction(title)
+            action.setCheckable(True)
+            action.setChecked(bool(mask & bit))
+            action.triggered.connect(
+                lambda checked, bit=bit: self._toggle_modifier(bit, checked)
+            )
+
+        submenu.addSeparator()
+        right = submenu.addAction("Use the right-hand modifiers")
+        right.setCheckable(True)
+        right.setChecked(bool(mask & MODIFIER_RIGHT))
+        right.setToolTip(
+            "QMK stores one side for the whole key, so this moves every modifier on "
+            "it from left to right together."
+        )
+        right.triggered.connect(
+            lambda checked: self._toggle_modifier(MODIFIER_RIGHT, checked)
+        )
+
+        submenu.addSeparator()
+        clear = submenu.addAction("Remove all modifiers")
+        clear.setEnabled(bool(mask))
+        clear.triggered.connect(lambda: self._set_selected_code(with_modifiers(code, 0)))
+
+    def _toggle_modifier(self, bit: int, on: bool) -> None:
+        if self._changes is None or self._keycodes is None:
+            return
+        kmid = self.canvas.selected()
+        if kmid < 0:
+            return
+        code = self._changes.code(self._current_layer(), kmid)
+        if not modifiable(code):
+            return
+        mask = modifier_mask(code)
+        mask = (mask | bit) if on else (mask & ~bit)
+        # Left or right is only meaningful while something is held; dropping the last
+        # modifier drops the side with it rather than leaving a bit behind.
+        if not mask & ~MODIFIER_RIGHT:
+            mask = 0
+        updated = with_modifiers(code, mask)
+        self._changes.set_key(self._current_layer(), kmid, updated)
+        self.statusBar().showMessage(f"Now {self._keycodes.name(updated)}.", 4000)
 
     # -- binding a keycode into whatever is armed ---------------------------------
 

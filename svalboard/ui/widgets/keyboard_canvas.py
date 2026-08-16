@@ -32,8 +32,11 @@ from ...protocol.keycodes import (
     KIND_MACRO,
     KIND_MASKED,
     KIND_TAP_DANCE,
+    KIND_TEMPLATE,
     KIND_UNSET,
     KeycodeSet,
+    modifier_label,
+    modifier_mask,
 )
 from ...protocol.kle import KeyPosition, Layout
 from ..theme import Theme
@@ -43,6 +46,9 @@ from .house import themed_font
 KIND_TINTS = {
     KIND_LAYER: "state.layer",
     KIND_MASKED: "state.modtap",
+    # A template only ever appears in the picker, tinted like the composed keycode
+    # it is on its way to becoming.
+    KIND_TEMPLATE: "state.modtap",
     KIND_MACRO: "state.macro",
     KIND_TAP_DANCE: "state.tapdance",
     KIND_CUSTOM: "state.custom",
@@ -126,6 +132,19 @@ class KeyboardCanvas(QWidget):
         min_x, min_y, max_x, max_y = self._layout.bounds
         unit = self._unit()
         return (max(1e-6, (max_x - min_x) * unit), max(1e-6, (max_y - min_y) * unit))
+
+    def natural_size(self) -> tuple[int, int]:
+        """How much room the board wants in order to need no scrollbars.
+
+        At the current zoom, or at 1:1 in fit mode — fit mode shrinks to whatever it
+        is given, so its "natural" size is the one where nothing is shrunk. Returns
+        ``(0, 0)`` before the keyboard's layout has arrived.
+        """
+        if self._layout is None or not self._layout.keys:
+            return (0, 0)
+        width, height = self._board_size()
+        scale = self._zoom if self._zoom is not None else 1.0
+        return (int(width * scale) + 24, int(height * scale) + 24)
 
     def _fit_scale(self) -> float:
         width, height = self._board_size()
@@ -375,7 +394,7 @@ class KeyboardCanvas(QWidget):
         rotated = self._begin_rotation(painter, key)
         rect = self._key_rect(key)
 
-        strip, text = _split_label(info)
+        strip, text = split_label(info)
 
         # A transparent key is only its glyph. Anything heavier turns a fall-through
         # layer into a wall of colour, which is what layer 3 looked like.
@@ -456,19 +475,29 @@ class KeyboardCanvas(QWidget):
 _COMPOSITE = re.compile(r"^([A-Za-z0-9_]+)\((.+)\)$")
 
 
-def _split_label(info) -> tuple[str, str]:
+def split_label(info) -> tuple[str, str]:
     """Separate a composite keycode into a corner strip and the key's own label.
 
     ``LCTL_T(KC_ENTER)`` is two facts — hold for Control, tap for Enter — and showing
     only "Enter" hides half of it. The held half goes in a small strip above the
-    label. Layer operations already read as two lines and are left alone.
+    label. Layer operations already read as two lines and are left alone, and so is
+    a template, whose label already says which half is missing.
     """
-    if info.kind == KIND_LAYER:
+    if info.kind in (KIND_LAYER, KIND_TEMPLATE):
         return "", info.label
     match = _COMPOSITE.match(info.name)
-    if match is None:
-        return "", info.label
-    return match.group(1), info.label
+    if match is not None:
+        outer, label = match.group(1), info.label
+        # A few labels already open with the outer name — OSM(MOD_LSFT) is labelled
+        # "OSM\nLSft". Putting it in the strip as well says it twice and makes the
+        # key a line too tall for its own body.
+        head, _, rest = label.partition("\n")
+        return outer, rest if rest and head == outer else label
+    # A modifier combination Vial cannot name falls back to hex, which says nothing.
+    # Its bits still do.
+    if info.kind == KIND_MASKED and (mask := modifier_mask(info.code)):
+        return modifier_label(mask), info.label
+    return "", info.label
 
 
 def _rotate_path(path: QPainterPath, pivot: QPointF, degrees: float) -> QPainterPath:

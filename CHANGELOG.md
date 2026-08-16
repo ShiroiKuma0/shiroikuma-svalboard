@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.0.1+004 — 2026-08-16
+
+### Composed keycodes are reachable at last
+
+Fifty-two keycodes existed in the table but appeared in no tab: every layer-tap, every mod-tap
+and every modifier wrapper. Each is a *template* — `LT2(kc)`, `LGUI(kc)` — with a hole in it
+where a basic keycode goes, and the tabs dropped anything with a hole. The only way to reach
+`LGUI(KC_1)` was to know it was spelled that way and type it into the search box.
+
+- **`LT0`–`LT15` now appear in the Layers tab**, after the plain operations.
+- **The modifier wrappers and mod-taps appear in the modifiers tab**, in the table's own order.
+- Picking one starts a **two-step compose**: a banner names the half already chosen, the tab
+  switches to `basic`, and the next click completes the keycode. Escape or Cancel abandons it,
+  and either way the picker returns to the tab and search you started from.
+- A template refuses what cannot fit inside it — a layer operation, a macro, a second template —
+  and says so rather than composing something wrong.
+
+### Modifiers on a key already assigned
+
+- **Right-click → Modifiers** adds or removes Ctrl, Shift, Alt and Super on the key as it
+  stands, with a switch for the right-hand side and "Remove all modifiers". Adding Super to `1`
+  no longer means knowing the result is called `LGUI(KC_1)` and finding it in the picker.
+- Disabled, with the reason in the title, for keys that have no room for the bits: layer
+  operations, layer-taps, macros, tap dances and the Svalboard's own keycodes.
+- Vial names only 18 of the 30 modifier combinations. The other 12 — most of the right-hand
+  pairs, and two left triples — are valid QMK keycodes that used to read as bare hex. They are
+  now described from their bits (`RCtl+RSft+RAlt held down together with KC_1`) and tinted as
+  what they are. The stored name stays hex, because that is what round-trips through a `.vil`.
+
+### Presentation
+
+- The keycode picker draws the held half of a composed keycode in a corner strip, as the board
+  has always done. `LGUI(KC_1)` and a plain `1` were previously the same button to look at.
+- A label that already opens with its own outer name — `OSM(MOD_LSFT)` is labelled `OSM\nLSft` —
+  no longer says it twice, once in the strip and once in the body.
+- The category list is sorted without regard to case. The four tabs built from the keyboard are
+  capitalised, and capitals used to herd them to the top of the list ahead of every other tab;
+  they now take their alphabetical place. `basic` remains what the picker opens on.
+
+### The window opens at a size that fits
+
+- The window now sizes itself to the board the keyboard actually reports, so neither the board
+  nor the picker opens scrolled, and no scrollbars appear at all where the screen allows it.
+  Clamped to the screen; on a monitor too small, the shortfall comes out of the picker, which
+  scrolls gracefully, rather than out of the board, which does not.
+- The picker asks for as many rows as the tab it opens on needs, up to eight.
+- Loading the keyboard blocks the GUI thread for a couple of seconds and the compositor's
+  configure events queue up behind it, so the new size is applied, verified a beat later, and
+  applied again if a stale configure overwrote it.
+
 ## 1.0.0+003 — 2026-08-09
 
 The first release: a complete native configurator, built and verified against 白い熊's Svalboard
