@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.0.1+004 — 2026-08-16
+## 1.0.1+005 — 2026-08-16
 
 ### Composed keycodes are reachable at last
 

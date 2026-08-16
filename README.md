@@ -9,7 +9,7 @@
 It talks to the keyboard directly over `hidraw` — no browser, no WebHID, no Chrome window
 open on another machine just to move a key. Built for KDE Plasma on Wayland.
 
-**📥 Latest release: [`1.0.0+003`](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases/latest)** — [all releases »](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases)
+**📥 Latest release: [`1.0.1+005`](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases/latest)** — [all releases »](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases)
 
 </div>
 
@@ -30,12 +30,32 @@ Keys are never filled with colour: every key stays black with a yellow label, an
 the border and a corner marker. A composite keycode shows its held half above its tapped one, so
 `LCTL_T(KC_ENTER)` reads as both facts rather than as a key called “Enter”.
 
+The window opens at the size the board actually needs, measured from the geometry the keyboard
+reported, so neither the board nor the keycode grid starts out scrolled and — where the screen
+allows it — no scrollbars appear at all.
+
 ## 🔍 Search across every keycode
 
 Roughly 1,600 keycodes sit in a dozen categories. Search ignores the selected category on
 purpose — not knowing which one a keycode lives in is the entire reason to search. The keycode
 table is generated from vial-gui rather than transcribed, because one wrong value silently writes
 the wrong key.
+
+## 🧱 Keycodes built from two clicks
+
+Layer-taps, mod-taps and modifier wrappers are not keycodes but *templates* — `LT2(kc)`,
+`LGUI(kc)` — each with a hole in it where a basic keycode goes. Fifty-two of them exist, and a
+picker that only shows finished keycodes cannot show any of them: reaching Super+`1` means
+already knowing it is spelled `LGUI(KC_1)`.
+
+They are offered here regardless. Pick the outer half, and the picker asks for the inner one —
+“`LT2` — now choose the key it types when tapped” — then completes it on your next click. It
+refuses what cannot fit inside, rather than composing something wrong.
+
+Modifiers can also be edited on a key already assigned: right-click, and Ctrl, Shift, Alt and
+Super are checkboxes on the key as it stands, with a switch for the right-hand side. Vial names
+only 18 of the 30 combinations; the other 12 are real QMK keycodes that other tools show as bare
+hex, and here they are described from their bits.
 
 ## 🧩 Macros, tap dances, combos, key overrides
 
@@ -95,7 +115,7 @@ ZIP-of-JSON format.
 ## Installing
 
 ```
-sudo dpkg -i shiroikuma-svalboard_1.0.0+003_all.deb
+sudo dpkg -i shiroikuma-svalboard_1.0.1+005_all.deb
 ```
 
 The package installs a `udev` rule and applies it, so the keyboard does not need replugging.
