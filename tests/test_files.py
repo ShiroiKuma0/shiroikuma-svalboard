@@ -218,3 +218,17 @@ def test_an_unreadable_keycode_name_does_not_abort_a_feature(keycodes: KeycodeSe
     entry = backup.tap_dance_objects(keycodes)[0]
     assert entry.on_tap == 0
     assert entry.on_hold == keycodes.parse("KC_A")
+
+
+def test_macro_notes_round_trip(keycodes: KeycodeSet) -> None:
+    """Notes ride in the cosmetic section, beside the layer names."""
+    original = build_backup(
+        keyboard_id=1, layers=1, rows=ROWS, cols=COLS,
+        codes=[0x0000] * PER_LAYER, keycodes=keycodes,
+        macro_notes={0: "“", 1: "”\nright double quote"},
+    )
+    payload = to_kbi(original)
+    assert payload["cosmetic"]["macro"] == {"0": "“", "1": "”\nright double quote"}
+    from svalboard.model.files import from_kbi
+
+    assert from_kbi(json.loads(json.dumps(payload))).macro_notes == original.macro_notes

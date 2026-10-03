@@ -2,10 +2,10 @@
 # Copyright (C) 2026 白い熊
 """A printable sheet of every layer, as self-contained HTML.
 
-The point of printing a layout is to have it beside the keyboard while learning it, so
-this is deliberately ink-light: black on white, one layer per block, empty layers left
-out. That is the opposite of the application's own colours, and intentionally — a page
-printed in the house style would be a solid black rectangle.
+The sheet is drawn in the application's own colours — yellow on black by default,
+whatever the theme currently says otherwise — one layer per block, empty layers left
+out. Printing keeps those colours too (``print-color-adjust: exact``), because a sheet
+that turned black-on-white on paper would no longer match the screen it came from.
 
 The output is one file with no external references, so it can be opened in a browser,
 printed, or kept.
@@ -14,6 +14,7 @@ printed, or kept.
 from __future__ import annotations
 
 import html
+from dataclasses import dataclass
 from datetime import datetime
 
 from ..protocol.keycodes import KeycodeSet
@@ -22,6 +23,18 @@ from ..protocol.kle import Layout
 #: Pixels per KLE unit on the printed page. Small enough that a 25-unit board fits
 #: across a sheet of A4 in landscape.
 UNIT = 34
+
+
+@dataclass(frozen=True)
+class SheetColours:
+    """The colours the sheet is drawn in, as CSS values; the house palette by default."""
+
+    background: str = "#000000"
+    text: str = "#FFFF00"
+    dim: str = "#C8C800"
+    key_background: str = "#000000"
+    key_border: str = "#FFFF00"
+    key_text: str = "#FFFF00"
 
 
 def _key_html(label: str, x: float, y: float, w: float, h: float) -> str:
@@ -41,8 +54,10 @@ def to_html(
     layer_names: dict[int, str] | None = None,
     board: str = "Svalboard",
     generated: datetime | None = None,
+    colours: SheetColours | None = None,
 ) -> str:
     """Render every non-empty layer."""
+    c = colours or SheetColours()
     names = layer_names or {}
     per_layer = layout.rows * layout.cols
     min_x, min_y, max_x, max_y = layout.bounds
@@ -87,21 +102,31 @@ def to_html(
 <meta charset="utf-8">
 <title>{html.escape(board)} — layers</title>
 <style>
-  /* Printed on paper, so this is ink-light and deliberately not the house style:
-     black on white, thin rules, no fills. */
-  body {{ font: 12px/1.4 sans-serif; color: #000; background: #fff; margin: 18px; }}
+  /* The house style, on screen and on paper alike. */
+  html {{ background: {c.background}; -webkit-print-color-adjust: exact;
+          print-color-adjust: exact; }}
+  body {{ font: 12px/1.4 sans-serif; color: {c.text}; background: {c.background};
+          margin: 18px; }}
   h1 {{ font-size: 17px; margin: 0 0 2px; }}
-  h1 + p {{ margin: 0 0 18px; color: #555; }}
+  h1 + p {{ margin: 0 0 18px; color: {c.dim}; }}
   h2 {{ font-size: 13px; margin: 0 0 6px; }}
   section {{ margin: 0 0 22px; break-inside: avoid; page-break-inside: avoid; }}
   .board {{ position: relative; }}
   .k {{
-    position: absolute; border: 1px solid #000; border-radius: 3px;
+    position: absolute; border: 1px solid {c.key_border}; border-radius: 3px;
+    background: {c.key_background}; color: {c.key_text};
     display: flex; align-items: center; justify-content: center;
     text-align: center; font-size: 9px; padding: 1px; overflow: hidden;
     box-sizing: border-box;
   }}
-  @media print {{ body {{ margin: 0; }} }}
+  /* Paper margins would print white around the black, so the page has none and the
+     body supplies them instead. */
+  @page {{ margin: 0; }}
+  @media print {{
+    html, body {{ min-height: 100%; }}
+    body {{ margin: 0; padding: 12mm; -webkit-box-decoration-break: clone;
+            box-decoration-break: clone; }}
+  }}
 </style>
 <h1>{html.escape(board)}</h1>
 <p>{len(blocks)} layers in use · {stamp}</p>

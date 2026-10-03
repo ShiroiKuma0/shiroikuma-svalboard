@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 from .hid.transport import DeviceNotPermitted, TransportError
 from .model.changes import KeymapChanges
 from .model.entries import EntryChanges, MacroChanges, SettingsChanges
+from .model.notes import MacroNotes
 from .model.exports import from_vil, to_keymap_header, to_vil
 from .model.printable import to_html
 from .model.files import (
@@ -78,6 +79,7 @@ class MainWindow(QMainWindow):
         self._keyboard: Keyboard | None = None
         self._changes: KeymapChanges | None = None
         self._macros: MacroChanges | None = None
+        self._macro_notes: MacroNotes | None = None
         self._tapdances: EntryChanges | None = None
         self._combos: EntryChanges | None = None
         self._overrides: EntryChanges | None = None
@@ -485,7 +487,8 @@ class MainWindow(QMainWindow):
         self._qmk.load(state.qmk_values, state.qmk_supported)
         self._qmk.subscribe(self._on_changes)
 
-        self.macro_page.bind(self._macros, self._keycodes)
+        self._macro_notes = MacroNotes(self._theme.settings, state.identity.keyboard_id)
+        self.macro_page.bind(self._macros, self._keycodes, self._macro_notes)
         self.qmk_page.bind(self._qmk)
         self._bind_svalboard_page(state)
         self.tester_page.bind(
@@ -1122,6 +1125,7 @@ class MainWindow(QMainWindow):
             codes=self._changes.working,
             keycodes=self._keycodes,
             layer_names=self._layer_names,
+            macro_notes=self._macro_notes.all() if self._macro_notes else None,
             macros=self._macros.working if self._macros else None,
             tap_dances=self._tapdances.working if self._tapdances else None,
             combos=self._combos.working if self._combos else None,
@@ -1257,6 +1261,8 @@ class MainWindow(QMainWindow):
 
         if backup.layer_names:
             self._layer_names.update(backup.layer_names)
+        if backup.macro_notes and self._macro_notes is not None:
+            self._macro_notes.update(backup.macro_notes)
         self._rebuild_pages()
         self._show_layer(self._current_layer())
         self.statusBar().showMessage(
@@ -1287,6 +1293,7 @@ class MainWindow(QMainWindow):
                     layers=state.capacities.layers,
                     layer_names=self._layer_names,
                     board=state.name,
+                    colours=self._sheet_colours(),
                 ),
                 encoding="utf-8",
             )
@@ -1294,6 +1301,19 @@ class MainWindow(QMainWindow):
             self._problem("Could not write the sheet", str(exc))
             return
         self.statusBar().showMessage(f"Wrote {path.name}. Open it and print.")
+
+    def _sheet_colours(self):
+        from .model.printable import SheetColours
+
+        css = self._theme.css
+        return SheetColours(
+            background=css("window.background"),
+            text=css("window.text"),
+            dim=css("window.dim"),
+            key_background=css("key.background"),
+            key_border=css("key.border"),
+            key_text=css("key.label.colour"),
+        )
 
     # -- export and import -------------------------------------------------------
 
@@ -1312,6 +1332,7 @@ class MainWindow(QMainWindow):
         if self._keyboard is None or self._changes is None:
             for key, title in (
                 ("keymap", "Keymap and layers"), ("macros", "Macros"),
+                ("macronotes", "Macro notes"),
                 ("tapdances", "Tap dances"), ("combos", "Combos"),
                 ("overrides", "Key overrides"),
             ):
@@ -1331,6 +1352,9 @@ class MainWindow(QMainWindow):
                 Category("macros", "Macros",
                          collect=lambda: self._current_backup().macros,
                          apply=self._apply_macros_payload),
+                Category("macronotes", "Macro notes",
+                         collect=lambda: {str(k): v for k, v in self._macro_notes.all().items()},
+                         apply=self._apply_macro_notes_payload),
                 Category("tapdances", "Tap dances",
                          collect=lambda: self._current_backup().tap_dances,
                          apply=self._apply_tapdances_payload),
@@ -1366,6 +1390,13 @@ class MainWindow(QMainWindow):
 
     def _apply_macros_payload(self, payload) -> int:
         return self._restore(macros=list(payload))
+
+    def _apply_macro_notes_payload(self, payload) -> int:
+        from .model.files import indexed
+
+        count = self._macro_notes.update(indexed(payload))
+        self.macro_page.rebuild()
+        return count
 
     def _apply_tapdances_payload(self, payload) -> int:
         return self._restore(tap_dances=list(payload))

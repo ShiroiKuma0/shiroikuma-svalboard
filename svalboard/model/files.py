@@ -66,6 +66,7 @@ class Backup:
     keymap: list[list[str]] = field(default_factory=list)
 
     layer_names: dict[int, str] = field(default_factory=dict)
+    macro_notes: dict[int, str] = field(default_factory=dict)
 
     #: Keycodes in these are names, exactly as in the keymap.
     macros: list[list[list]] = field(default_factory=list)
@@ -108,6 +109,8 @@ class Backup:
                 parts.append(f"{count} {name}")
         if self.layer_names:
             parts.append(f"{len(self.layer_names)} named layers")
+        if self.macro_notes:
+            parts.append(f"{len(self.macro_notes)} macro notes")
         return ", ".join(parts)
 
     def macro_objects(self, keycodes: KeycodeSet) -> list[Macro]:
@@ -191,6 +194,7 @@ def build_backup(
     codes: list[int],
     keycodes: KeycodeSet,
     layer_names: dict[int, str] | None = None,
+    macro_notes: dict[int, str] | None = None,
     passthrough: dict[str, Any] | None = None,
     macros: list[Macro] | None = None,
     tap_dances: list[TapDance] | None = None,
@@ -209,6 +213,7 @@ def build_backup(
             for index in range(layers)
         ],
         layer_names=dict(layer_names or {}),
+        macro_notes=dict(macro_notes or {}),
         passthrough=dict(passthrough or {}),
         macros=[
             [
@@ -284,6 +289,10 @@ def to_kbi(backup: Backup) -> dict[str, Any]:
         cosmetic["layer"] = {str(k): v for k, v in sorted(backup.layer_names.items())}
     elif "layer" in cosmetic:
         cosmetic.pop("layer")
+    if backup.macro_notes:
+        cosmetic["macro"] = {str(k): v for k, v in sorted(backup.macro_notes.items())}
+    elif "macro" in cosmetic:
+        cosmetic.pop("macro")
     if cosmetic:
         payload["cosmetic"] = cosmetic
 
@@ -322,6 +331,19 @@ def load(path: Path) -> Backup:
     )
 
 
+def indexed(section: Any) -> dict[int, str]:
+    """A ``{"0": "…"}`` cosmetic section as numbered strings, skipping junk."""
+    result: dict[int, str] = {}
+    if not isinstance(section, dict):
+        return result
+    for key, value in section.items():
+        try:
+            result[int(key)] = str(value)
+        except ValueError:
+            continue
+    return result
+
+
 def from_kbi(payload: dict[str, Any]) -> Backup:
     try:
         keyboard_id = int(str(payload.get("kbid") or 0))
@@ -342,12 +364,8 @@ def from_kbi(payload: dict[str, Any]) -> Backup:
         )
 
     cosmetic = payload.get("cosmetic") or {}
-    names: dict[int, str] = {}
-    for key, value in (cosmetic.get("layer") or {}).items():
-        try:
-            names[int(key)] = str(value)
-        except ValueError:
-            continue
+    names = indexed(cosmetic.get("layer"))
+    notes = indexed(cosmetic.get("macro"))
 
     known = {
         "kbid", "layers", "rows", "cols", "keymap", "writer", "writer_version",
@@ -362,6 +380,7 @@ def from_kbi(payload: dict[str, Any]) -> Backup:
         cols=cols,
         keymap=[[str(name) for name in layer] for layer in keymap],
         layer_names=names,
+        macro_notes=notes,
         passthrough=passthrough,
         source=str(payload.get("writer") or "keybard"),
         macros=list(payload.get("macros") or []),

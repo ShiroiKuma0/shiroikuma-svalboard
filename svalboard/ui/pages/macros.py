@@ -6,6 +6,10 @@ Unlike the other entry editors, a macro is an ordered sequence rather than a fix
 of fields, so each action is a row that can be moved, edited or removed. The header
 carries the shared buffer's remaining space, because macros compete for it — one long
 macro can leave no room for the rest, and that is worth seeing before writing.
+
+Above the actions sits the macro's note, kept on this computer rather than the
+keyboard; its first line is what the list shows, so “ and ” read as themselves
+instead of as "201c" and "201d".
 """
 
 from __future__ import annotations
@@ -17,6 +21,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QListWidget,
     QListWidgetItem,
+    QPlainTextEdit,
     QScrollArea,
     QSpinBox,
     QVBoxLayout,
@@ -24,6 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from ...model.entries import MacroChanges
+from ...model.notes import MacroNotes, headline
 from ...protocol.keycodes import KeycodeSet
 from ...protocol.macros import Action, Macro
 from ..theme import Theme
@@ -34,6 +40,35 @@ ACTION_KINDS = (("Text", "text"), ("Tap", "tap"), ("Hold", "down"), ("Release", 
                 ("Delay", "delay"))
 
 
+class _GrowingNote(QPlainTextEdit):
+    """A text box exactly as tall as its text, from one line upwards — never a fixed box."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.document().contentsChanged.connect(self.fit)
+
+    def fit(self) -> None:
+        if not self.isVisible():
+            return  # Before the first show the viewport is not laid out yet.
+        # In a plain-text document the layout's height is counted in lines, wrapped
+        # ones included; the chrome is whatever the frame and stylesheet padding take.
+        lines = max(1, int(self.document().size().height()))
+        chrome = self.height() - self.viewport().height()
+        margin = int(self.document().documentMargin() * 2)
+        height = lines * self.fontMetrics().lineSpacing() + margin + chrome
+        if height != self.height():
+            self.setFixedHeight(height)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802  (Qt naming)
+        super().resizeEvent(event)
+        self.fit()
+
+    def showEvent(self, event) -> None:  # noqa: N802  (Qt naming)
+        super().showEvent(event)
+        self.fit()
+
+
 class MacroPage(QWidget):
     slotArmed = pyqtSignal(object, object)
 
@@ -41,6 +76,7 @@ class MacroPage(QWidget):
         super().__init__(parent)
         self._theme = theme
         self._changes: MacroChanges | None = None
+        self._notes: MacroNotes | None = None
         self._keycodes: KeycodeSet | None = None
         self._current = 0
         self._slots: list[KeySlot] = []
@@ -51,7 +87,13 @@ class MacroPage(QWidget):
 
         self.list = QListWidget()
         self.list.setFixedWidth(190)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.list.currentRowChanged.connect(self._select)
+
+        self.note = _GrowingNote()
+        self.note.setPlaceholderText("Note — what this macro does. The first line shows in the list.")
+        self.note.setTabChangesFocus(True)
+        self.note.textChanged.connect(self._note_edited)
 
         self.actions_host = QWidget()
         self.actions = QVBoxLayout(self.actions_host)
@@ -79,6 +121,7 @@ class MacroPage(QWidget):
         right = QVBoxLayout()
         right.setContentsMargins(0, 0, 0, 0)
         right.setSpacing(6)
+        right.addWidget(self.note)
         right.addLayout(add_row)
         right.addWidget(scroll, 1)
 
@@ -100,12 +143,14 @@ class MacroPage(QWidget):
 
     def _restyle(self) -> None:
         self.summary.setStyleSheet(f"color: {self._theme.css('row.description.colour')};")
+        self.note.fit()
 
     # -- data --------------------------------------------------------------------
 
-    def bind(self, changes: MacroChanges, keycodes: KeycodeSet) -> None:
+    def bind(self, changes: MacroChanges, keycodes: KeycodeSet, notes: MacroNotes) -> None:
         self._changes = changes
         self._keycodes = keycodes
+        self._notes = notes
         self._current = 0
         self.rebuild()
 
@@ -135,21 +180,48 @@ class MacroPage(QWidget):
 
         blocked = self.list.blockSignals(True)
         self.list.clear()
-        for index, macro in enumerate(changes.working):
-            preview = macro.text_preview()
-            if not preview and not macro.is_empty:
-                preview = f"{len(macro.actions)} actions"
-            marker = " •" if changes.is_changed(index) else ""
-            item = QListWidgetItem(f"M{index}{marker}" + (f"   {preview}" if preview else ""))
+        for index in range(len(changes)):
+            item = QListWidgetItem()
             self.list.addItem(item)
+            self._label_item(index)
         self.list.setCurrentRow(self._current)
         self.list.blockSignals(blocked)
 
+        self._show_note()
         self._rebuild_actions()
+
+    def _label_item(self, index: int) -> None:
+        """One list entry: number, unwritten marker, then the note or a preview."""
+        assert self._changes is not None
+        item = self.list.item(index)
+        if item is None:
+            return
+        macro = self._changes[index]
+        note = self._notes.get(index) if self._notes is not None else ""
+        preview = headline(note) or macro.text_preview()
+        if not preview and not macro.is_empty:
+            preview = f"{len(macro.actions)} actions"
+        marker = " •" if self._changes.is_changed(index) else ""
+        item.setText(f"M{index}{marker}" + (f"   {preview}" if preview else ""))
+        item.setToolTip(note)
+
+    def _show_note(self) -> None:
+        text = self._notes.get(self._current) if self._notes is not None else ""
+        if self.note.toPlainText() != text:
+            blocked = self.note.blockSignals(True)
+            self.note.setPlainText(text)
+            self.note.blockSignals(blocked)
+
+    def _note_edited(self) -> None:
+        if self._notes is None:
+            return
+        self._notes.set(self._current, self.note.toPlainText().strip())
+        self._label_item(self._current)
 
     def _select(self, index: int) -> None:
         if index >= 0:
             self._current = index
+            self._show_note()
             self._rebuild_actions()
 
     # -- the action list ---------------------------------------------------------
