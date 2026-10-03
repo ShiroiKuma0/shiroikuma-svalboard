@@ -9,7 +9,7 @@
 It talks to the keyboard directly over `hidraw` — no browser, no WebHID, no Chrome window
 open on another machine just to move a key. Built for KDE Plasma on Wayland.
 
-**📥 Latest release: [`1.0.1+005`](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases/latest)** — [all releases »](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases)
+**📥 Latest release: [`1.0.1+007`](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases/latest)** — [all releases »](https://github.com/ShiroiKuma0/shiroikuma-svalboard/releases)
 
 </div>
 
@@ -66,6 +66,11 @@ Macros are accounted for honestly. They share one 62 KB buffer, so the editor sh
 it the whole set needs, any change counts as one write rather than many, and writing is **refused**
 when the set no longer fits — silently truncating would drop the tail of a configuration.
 
+Every macro can carry a **note** saying what it does, and the note's first line is what the macro
+list shows — so the macros that type “ and ” are listed as “ and ”, not as `201c` and `201d`. The
+keyboard has no room for notes, so they are kept on the computer per keyboard, saved as they are
+typed, and carried in backups and exports beside the macros themselves.
+
 ## ⚙️ QMK settings that tell the truth
 
 The keyboard is asked which settings it carries, and the answer is honoured. A firmware built
@@ -100,7 +105,8 @@ the keyboard is unchanged.
 `.kbi` for whole-keyboard backups, `.vil` for Vial, and `keymap_all.h` for baking a layout into
 firmware so it survives a chip erase. Keycodes are stored as names, so a backup survives firmware
 whose numbering has shifted, and sections this version does not model are carried through
-untouched rather than dropped. Layers can also be written to a printable sheet.
+untouched rather than dropped. Layers can also be written to a printable sheet, drawn in the
+same colours as the application — yellow on black by default — on screen and on paper alike.
 
 ## 🐻 白い熊 Svalboard UI
 

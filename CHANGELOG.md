@@ -1,5 +1,35 @@
 # Changelog
 
+## 1.0.1+007 — 2026-10-03
+
+### Macros have notes
+
+The keyboard stores a macro's actions and nothing else, so a macro that types U+201C used to show
+in the list as `201c` at best — what it was *for* had to be remembered.
+
+- **Each macro has a note**, edited in a box above its actions. The box grows to fit the whole
+  note, one line upwards, rather than scrolling inside a fixed height.
+- **The note's first line is what the macro list shows** after the macro number, so the macros
+  that type “ and ” are listed as `M0 “` and `M1 ”`. A long first line is elided; hovering the
+  entry shows the whole note. A macro without a note still shows its text preview.
+- **Notes live on this computer, not the keyboard** — the firmware has no room for them. They are
+  kept per keyboard under its Vial ID, saved as they are typed, and never count as unwritten
+  changes: writing to the keyboard neither needs nor touches them.
+- **They travel with the configuration**: `.kbi` backups carry them as `cosmetic.macro`, beside
+  the layer names, and the Export / Import panel has a **Macro notes** category of its own.
+- **Clearing a macro keeps its note.** The clear can be reverted until it is written; a deleted
+  note could not be, so removing it stays a deliberate edit.
+
+### The printable sheet in the house colours
+
+- **Printable layers… now writes the sheet in the theme's colours** — yellow on black by default,
+  and following whatever the window, key, border and label colours have been set to — instead of
+  ink-light black on white.
+- **The colours survive printing.** Browsers drop backgrounds when printing unless told not to; the
+  sheet asks for exact colours, gives the page no margins of its own so the edges print black
+  rather than white, and repeats its padding at the top of every page so a layer that starts a new
+  page does not sit against the edge.
+
 ## 1.0.1+005 — 2026-08-16
 
 ### Composed keycodes are reachable at last
